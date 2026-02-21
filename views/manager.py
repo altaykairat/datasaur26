@@ -122,10 +122,12 @@ def _render_ticket_card(ticket: Ticket, db, manager_id: int):
     ai_type = "—"
     priority = "—"
     sentiment = "—"
+    summary = "—"
     if ticket.ai_analysis_json and isinstance(ticket.ai_analysis_json, dict):
         ai_type = ticket.ai_analysis_json.get("type", "—")
         priority = ticket.ai_analysis_json.get("priority", "—")
         sentiment = ticket.ai_analysis_json.get("sentiment", "—")
+        summary = ticket.ai_analysis_json.get("summary", "—")
 
     priority_label = ""
     if isinstance(priority, int):
@@ -147,6 +149,29 @@ def _render_ticket_card(ticket: Ticket, db, manager_id: int):
         with col3:
             st.caption("Status")
             st.write(ticket.status)
+
+        # AI Summary
+        if summary and summary != "—":
+            st.markdown('<div class="fire-divider"></div>', unsafe_allow_html=True)
+            st.caption("AI Summary")
+            st.info(summary)
+
+        # Routing explanation
+        if ticket.routing_trace and isinstance(ticket.routing_trace, dict):
+            st.markdown('<div class="fire-divider"></div>', unsafe_allow_html=True)
+            st.caption("Why Assigned")
+            geo = ticket.routing_trace.get("geo_decision", {})
+            sf = ticket.routing_trace.get("skill_filter", {})
+            rule = geo.get("rule", ticket.office_rule or "—")
+            fallback = sf.get("fallback_used") or "none"
+            st.write(f"Office: **{geo.get('resolved_city', '—')}** (rule: {rule}) · Filter fallback: {fallback}")
+
+        # Flags
+        if ticket.flags and isinstance(ticket.flags, dict):
+            active_flags = [k for k, v in ticket.flags.items() if v]
+            if active_flags:
+                st.caption("Flags")
+                st.code(", ".join(active_flags))
 
         st.markdown('<div class="fire-divider"></div>', unsafe_allow_html=True)
 

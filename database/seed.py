@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import config  # noqa: E402
 from database.connection import engine, get_db  # noqa: E402
-from database.models import Base, Manager, Office, User, UserRole  # noqa: E402
+from database.models import Base, Manager, Office, User, UserRole, RoundRobinState  # noqa: E402
 from utils.auth import hash_password  # noqa: E402
 
 # Hardcoded coordinates for Kazakhstan cities (from offices)
@@ -76,6 +76,7 @@ def seed_managers(db):
                 skills=skills,
                 office_location=office,
                 current_load=current_load,
+                is_active=True,
             )
             db.add(manager)
             count += 1

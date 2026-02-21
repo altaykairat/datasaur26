@@ -1,6 +1,7 @@
 """AI Intelligence Engine — dual-mode ticket analysis via DeepSeek or Phi-4."""
 import json
 import re
+import time
 from openai import OpenAI
 
 import config
@@ -26,9 +27,11 @@ SYSTEM_PROMPT = """Ты — AI ассистент системы обработ�
 
 3. "language" — язык обращения, СТРОГО одно из: "RU", "KZ", "ENG"
 
-4. "sentiment" — тональность, СТРОГО одно из: "Positive", "Neutral", "Negative"
+4. "sentiment" — тональность, СТРОГО одно из: "Позитивный", "Нейтральный", "Негативный"
 
 5. "normalized_address" — извлечь город и улицу из текста обращения (если упоминаются). Формат: "Город, улица" или "Unknown" если нет адреса в тексте.
+
+6. "summary" — краткое резюме обращения (1-2 предложения) + рекомендуемые следующие действия для менеджера.
 
 ВАЖНО: Верни ТОЛЬКО валидный JSON без маркдаун-форматирования, без ```json``` блоков, без пояснений. Только чистый JSON."""
 
@@ -38,6 +41,8 @@ USER_PROMPT_TEMPLATE = """Обращение клиента:
 \"\"\"
 
 Верни JSON анализ этого обращения."""
+
+MAX_RETRIES = 2  # Number of retry attempts before fallback
 
 
 class IntelligenceEngine:
@@ -71,27 +76,50 @@ class IntelligenceEngine:
         """
         Analyze a ticket description and return structured data.
 
-        Returns dict with: type, priority, language, sentiment, normalized_address.
+        Returns dict with: type, priority, language, sentiment, normalized_address,
+        summary, and optional flags (ai_fallback, ai_schema_error, needs_clarification, etc).
         """
         if not description or not description.strip():
-            return self._fallback_analysis()
+            result = self._fallback_analysis()
+            result["needs_clarification"] = True
+            result["priority"] = 3  # Lower priority for empty text
+            result["summary"] = "Пустое обращение; требуется уточнение у клиента."
+            return result
 
-        try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": USER_PROMPT_TEMPLATE.format(description=description[:2000])},
-                ],
-                temperature=0.1,
-                max_tokens=500,
-            )
+        last_error = None
+        for attempt in range(MAX_RETRIES + 1):
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": USER_PROMPT_TEMPLATE.format(description=description[:2000])},
+                    ],
+                    temperature=0.1,
+                    max_tokens=600,
+                    timeout=30,
+                )
 
-            raw = response.choices[0].message.content.strip()
-            return self._parse_response(raw)
-        except Exception as e:
-            print(f"[AI ERROR] {e}")
-            return self._fallback_analysis()
+                raw = response.choices[0].message.content.strip()
+                result = self._parse_response(raw)
+
+                # If parse returned a fallback due to schema error, retry once more
+                if result.get("ai_schema_error") and attempt < MAX_RETRIES:
+                    last_error = "ai_schema_error"
+                    continue
+
+                return result
+
+            except Exception as e:
+                last_error = str(e)
+                print(f"[AI ERROR] Attempt {attempt + 1}/{MAX_RETRIES + 1}: {e}")
+                if attempt < MAX_RETRIES:
+                    time.sleep(0.5 * (attempt + 1))  # Brief backoff
+                    continue
+
+        # All retries exhausted — return fallback
+        print(f"[AI ERROR] All {MAX_RETRIES + 1} attempts failed. Using fallback. Last error: {last_error}")
+        return self._fallback_analysis()
 
     def _parse_response(self, raw: str) -> dict:
         """Parse the AI response into a structured dict, with fallbacks."""
@@ -100,6 +128,7 @@ class IntelligenceEngine:
         raw = re.sub(r"```\s*", "", raw)
         raw = raw.strip()
 
+        data = None
         try:
             data = json.loads(raw)
         except json.JSONDecodeError:
@@ -109,9 +138,12 @@ class IntelligenceEngine:
                 try:
                     data = json.loads(match.group())
                 except json.JSONDecodeError:
-                    return self._fallback_analysis()
-            else:
-                return self._fallback_analysis()
+                    pass
+
+        if data is None:
+            result = self._fallback_analysis()
+            result["ai_schema_error"] = True
+            return result
 
         # Validate and normalize fields
         valid_types = [
@@ -119,25 +151,36 @@ class IntelligenceEngine:
             "Неработоспособность приложения", "Мошеннические действия", "Спам"
         ]
         valid_languages = ["RU", "KZ", "ENG"]
-        valid_sentiments = ["Positive", "Neutral", "Negative"]
+        valid_sentiments = ["Позитивный", "Нейтральный", "Негативный"]
 
         result = {
             "type": data.get("type", "Консультация"),
             "priority": data.get("priority", 5),
             "language": data.get("language", "RU"),
-            "sentiment": data.get("sentiment", "Neutral"),
+            "sentiment": data.get("sentiment", "Нейтральный"),
             "normalized_address": data.get("normalized_address", "Unknown"),
+            "summary": data.get("summary", "Резюме недоступно."),
         }
 
-        # Clamp values
+        # Validate type — flag low confidence if unknown
         if result["type"] not in valid_types:
             result["type"] = "Консультация"
-        if not isinstance(result["priority"], int) or not (1 <= result["priority"] <= 10):
+            result["ai_type_low_confidence"] = True
+
+        # Clamp priority
+        if not isinstance(result["priority"], (int, float)) or not (1 <= result["priority"] <= 10):
             result["priority"] = 5
+        else:
+            result["priority"] = int(result["priority"])
+
+        # Validate language — default RU
         if result["language"] not in valid_languages:
             result["language"] = "RU"
+            result["language_confidence"] = "low"
+
+        # Validate sentiment
         if result["sentiment"] not in valid_sentiments:
-            result["sentiment"] = "Neutral"
+            result["sentiment"] = "Нейтральный"
 
         return result
 
@@ -147,6 +190,8 @@ class IntelligenceEngine:
             "type": "Консультация",
             "priority": 5,
             "language": "RU",
-            "sentiment": "Neutral",
+            "sentiment": "Нейтральный",
             "normalized_address": "Unknown",
+            "summary": "AI недоступен; требуется ручная проверка обращения.",
+            "ai_fallback": True,
         }

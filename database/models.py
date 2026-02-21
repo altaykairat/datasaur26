@@ -2,7 +2,7 @@
 from datetime import datetime, timezone
 from sqlalchemy import (
     Column, Integer, String, Text, JSON, ForeignKey,
-    DateTime, Float, Enum as SAEnum, ARRAY
+    DateTime, Float, Enum as SAEnum, Boolean
 )
 from sqlalchemy.orm import declarative_base, relationship
 import enum
@@ -18,8 +18,16 @@ class UserRole(str, enum.Enum):
 
 class TicketStatus(str, enum.Enum):
     NEW = "New"
+    INGESTED = "Ingested"
+    QUEUED = "Queued"
+    ENRICHING = "Enriching"
+    ENRICHED = "Enriched"
+    ROUTING = "Routing"
     ASSIGNED = "Assigned"
     CLOSED = "Closed"
+    ENRICH_FAILED = "EnrichFailed"
+    ROUTING_FAILED = "RoutingFailed"
+    DEAD_LETTER = "DeadLetter"
 
 
 class User(Base):
@@ -47,6 +55,7 @@ class Manager(Base):
     skills = Column(JSON, nullable=False, default=list)  # ["VIP", "ENG", "KZ"]
     office_location = Column(String(100), nullable=False)
     current_load = Column(Integer, nullable=False, default=0)
+    is_active = Column(Boolean, nullable=False, default=True)
 
     user_account = relationship("User", back_populates="manager", uselist=False)
     assigned_tickets = relationship("Ticket", back_populates="assigned_manager")
@@ -61,6 +70,7 @@ class Ticket(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     customer_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     client_guid = Column(String(100), nullable=True)  # From CSV batch uploads
+    correlation_id = Column(String(50), nullable=True)  # Unique processing trace ID
     description = Column(Text, nullable=False)
     status = Column(String(20), nullable=False, default=TicketStatus.NEW.value)
     assigned_manager_id = Column(Integer, ForeignKey("managers.id"), nullable=True)
@@ -68,6 +78,10 @@ class Ticket(Base):
     segment = Column(String(50), nullable=True)  # VIP, Mass, Priority
     client_city = Column(String(100), nullable=True)
     client_address = Column(Text, nullable=True)
+    office_rule = Column(String(100), nullable=True)  # How office was selected
+    routing_trace = Column(JSON, nullable=True)  # Full audit trail of routing decisions
+    flags = Column(JSON, nullable=True)  # Boolean flags dict
+    workload_at_assignment = Column(Integer, nullable=True)  # Manager load when assigned
     created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
 
     customer = relationship("User", back_populates="tickets", foreign_keys=[customer_id])
@@ -83,8 +97,21 @@ class Office(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     city = Column(String(100), nullable=False, unique=True)
     address = Column(Text, nullable=True)
-    lat = Column(Float, nullable=False)
-    lon = Column(Float, nullable=False)
+    lat = Column(Float, nullable=True)
+    lon = Column(Float, nullable=True)
 
     def __repr__(self):
         return f"<Office(city='{self.city}', lat={self.lat}, lon={self.lon})>"
+
+
+class RoundRobinState(Base):
+    """Persisted round-robin pointer per office + candidate pair."""
+    __tablename__ = "rr_state"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    office_city = Column(String(100), nullable=False)
+    candidate_key = Column(String(50), nullable=False)  # e.g. "12_34" sorted manager IDs
+    pointer = Column(Integer, nullable=False, default=0)
+
+    def __repr__(self):
+        return f"<RRState(office='{self.office_city}', key='{self.candidate_key}', ptr={self.pointer})>"

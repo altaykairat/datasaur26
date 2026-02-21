@@ -144,6 +144,10 @@ def find_nearest_office(city_name: str, offices: list[dict]) -> tuple[str, float
     best_dist = float("inf")
 
     for office in offices:
+        # Skip offices with missing coordinates
+        if office.get("lat") is None or office.get("lon") is None:
+            continue
+
         dist = haversine(client_lat, client_lon, office["lat"], office["lon"])
         if dist < best_dist:
             best_dist = dist
@@ -152,5 +156,9 @@ def find_nearest_office(city_name: str, offices: list[dict]) -> tuple[str, float
             # Tie breaker: alphabetical office name
             if office["city"] < best_office:
                 best_office = office["city"]
+
+    if best_office is None:
+        # All offices had missing coordinates
+        return None, -1
 
     return best_office, best_dist
