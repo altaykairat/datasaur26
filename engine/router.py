@@ -20,7 +20,6 @@ REQUIRED_CSV_COLUMNS = {"GUID клиента", "Сегмент клиента", 
 # Description column may have trailing space — we check both variants
 DESCRIPTION_VARIANTS = {"Описание ", "Описание"}
 
-
 class TicketRouter:
     """Routes tickets to the best manager using the full FIRE pipeline."""
 

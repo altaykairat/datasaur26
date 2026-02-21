@@ -5,16 +5,19 @@ Customer Support Dispatch System with AI-powered ticket enrichment and rule-base
 ## What It Does
 
 FIRE takes customer support tickets (live or batch CSV) and automatically:
-1. **Analyzes** each ticket using AI (DeepSeek API or local Phi-4 via Ollama)
-2. **Routes** it to the best manager using geo-location, skill matching, and load balancing
+1. **Validates** the CSV schema and detects duplicate tickets
+2. **Analyzes** each ticket using AI (DeepSeek API or local Phi-4 via Ollama) — extracts type, priority, language, sentiment, address, and summary
+3. **Routes** it to the best office via geo-location (Haversine distance, deterministic 50/50 fallback)
+4. **Filters** managers by hard skill rules (VIP, role, language) with a 5-level graduated cascade
+5. **Assigns** via round-robin between the top-2 lowest-load managers
 
 ## Architecture
 
 ```
-┌─────────────┐     ┌──────────────────┐     ┌─────────────────┐
-│  Streamlit   │────▶│  TicketRouter    │────▶│  PostgreSQL DB  │
-│  UI (app.py) │     │  (engine/)       │     │  (database/)    │
-└─────────────┘     └──────┬───────────┘     └─────────────────┘
+┌─────────────┐     ┌──────────────────┐     ┌──────────────────┐
+│  Streamlit   │────▶│  TicketRouter    │────▶│  PostgreSQL DB   │
+│  UI (app.py) │     │  (engine/)       │     │  (database/)     │
+└─────────────┘     └──────┬───────────┘     └──────────────────┘
                            │
                     ┌──────▼───────────┐
                     │ IntelligenceEngine│
@@ -28,58 +31,84 @@ FIRE takes customer support tickets (live or batch CSV) and automatically:
 ├── app.py                  # Streamlit entry point, login/register, CSS theme
 ├── config.py               # Reads DATABASE_URL, DEEPSEEK_API_KEY, OLLAMA_BASE_URL from .env
 ├── database/
-│   ├── models.py           # SQLAlchemy ORM: User, Manager, Ticket, Office
+│   ├── models.py           # ORM: User, Manager, Ticket, Office, RoundRobinState
 │   ├── connection.py       # Engine + session factory
 │   └── seed.py             # Loads managers.csv + business_units.csv into DB
 ├── engine/
-│   ├── intelligence.py     # AI wrapper: DeepSeek API or Phi-4 (Ollama), returns JSON analysis
-│   └── router.py           # TicketRouter: geo-route → skill-filter → load-balance pipeline
+│   ├── intelligence.py     # AI wrapper: DeepSeek/Phi-4, bounded retries, summary, fallback flags
+│   └── router.py           # TicketRouter: validate → enrich → geo-route → skill-filter → RR balance
 ├── views/
-│   ├── admin.py            # CSV upload, batch routing, live stats/charts, AI mode toggle
+│   ├── admin.py            # CSV upload, batch routing, stats, management tools
 │   ├── customer.py         # Create ticket, view my tickets
-│   └── manager.py          # View assigned tickets, close tickets
+│   └── manager.py          # View tickets with AI summary, routing trace, flags; close tickets
 ├── utils/
 │   ├── geo.py              # Haversine distance, 30+ Kazakhstan city coordinates, fuzzy matching
 │   └── auth.py             # bcrypt password hashing
-├── managers.csv            # 51 managers with roles, skills, offices, current load
-├── business_units.csv      # 16 office locations across Kazakhstan
-├── tickets.csv             # Sample tickets for testing batch routing
+├── input/
+│   ├── managers.csv        # 51 managers with roles, skills, offices, current load
+│   ├── business_units.csv  # 16 office locations across Kazakhstan
+│   └── tickets.csv         # Sample tickets for testing batch routing
 ├── requirements.txt
-├── .env.example            # Template for environment variables
+├── .env.example
 └── .gitignore
 ```
 
 ## Routing Pipeline (engine/router.py)
 
-Each ticket goes through 3 steps:
+### Step 1 — CSV Validation
+- Checks required columns exist (`GUID клиента`, `Описание`, `Сегмент клиента`, `Населённый пункт`, `Область`)
+- Duplicate GUIDs → skipped, flagged `duplicate_ticket_id`
+- Bad rows → `DeadLetter` status, batch continues
 
-### Step 1 — AI Enrichment (`engine/intelligence.py`)
-The AI analyzes the ticket description and returns:
-- **type**: Жалоба / Смена данных / Консультация / Претензия / Неработоспособность приложения / Мошеннические действия / Спам
-- **priority**: 1–10
-- **language**: RU / KZ / ENG
-- **sentiment**: Positive / Neutral / Negative
+### Step 2 — AI Enrichment (`engine/intelligence.py`)
+The AI analyzes ticket text and returns:
+- **type**: 7 enums (Жалоба / Смена данных / Консультация / Претензия / Неработоспособность приложения / Мошеннические действия / Спам)
+- **priority**: 1–10 (clamped)
+- **language**: RU / KZ / ENG (default RU)
+- **sentiment**: Позитивный / Нейтральный / Негативный
 - **normalized_address**: extracted city/street or "Unknown"
+- **summary**: 1–2 sentences + recommended next actions
 
-### Step 2 — Geo-Routing (`utils/geo.py`)
-- Match the client's city to the nearest office using Haversine distance
-- If distance > 500km or city unknown → random fallback to Astana or Almaty
+Retries 2× on failure, then falls back to safe defaults with `ai_fallback=true`.
 
-### Step 3 — Skill Filter + Load Balance
-- **VIP segment** → manager must have "VIP" skill
-- **Type = "Смена данных"** → manager must be "Главный специалист"
-- **Language KZ/ENG** → manager must have that language skill
-- From eligible managers, pick randomly from the 2 with lowest `current_load`
-- If no eligible manager found → fallback pool from Astana/Almaty
+### Step 3 — Geo-Routing (`utils/geo.py`)
+- Exact match → fuzzy match → region fallback → AI-extracted address
+- If office city: direct route. If not: Haversine nearest office.
+- Distance > 500km or unknown → deterministic 50/50 via `hash(ticket_id) % 2` to Астана/Алматы
+- Flags: `address_unknown`, `foreign_country`, `geocode_failed`
+
+### Step 4 — Skill Filter (graduated cascade)
+1. **Strict**: VIP skill + role + language in target office
+2. **Relax language**: drop KZ/ENG, keep VIP + role
+3. **Expand offices**: Астана + Алматы, keep VIP + role
+4. **VIP escalation**: never relax VIP → unassigned
+5. **Global fallback**: lowest-load Глав спец, then any active manager
+
+### Step 5 — Round Robin Load Balance
+- Sort by `(current_load, manager_id)`, pick **top 2**
+- Alternate via persisted RR pointer in `rr_state` table
+- `workload_at_assignment` recorded
+
+### Routing Trace & Flags
+Every ticket stores a full `routing_trace` JSON (geo decision, skill filter, load balance details) and `flags` dict for audit/explainability.
 
 ## Database Schema (database/models.py)
 
 | Table | Key Columns |
 |-------|-------------|
 | `users` | id, username, password_hash, role (customer/manager/admin), manager_id (FK) |
-| `managers` | id, name, role, skills (JSON array), office_location, current_load |
-| `tickets` | id, customer_id, description, status (New/Assigned/Closed), assigned_manager_id, ai_analysis_json, segment, created_at |
+| `managers` | id, name, role, skills (JSON), office_location, current_load, **is_active** |
+| `tickets` | id, client_guid, **correlation_id**, description, status (10 states), assigned_manager_id, ai_analysis_json, segment, **office_rule**, **routing_trace** (JSON), **flags** (JSON), **workload_at_assignment**, created_at |
 | `offices` | id, city, address, lat, lon |
+| `rr_state` | id, office_city, candidate_key, pointer |
+
+### Ticket States
+```
+New → Ingested → Queued → Enriching → Enriched → Routing → Assigned → Closed
+                                                         ↘ RoutingFailed
+                                  ↘ EnrichFailed
+                                                                    ↘ DeadLetter
+```
 
 ## Setup
 
@@ -92,26 +121,19 @@ source .venv/bin/activate
 pip install -r requirements.txt
 
 # 3. PostgreSQL (Ubuntu/Debian instructions)
-# Install PostgreSQL 16 server and client if not installed
 sudo apt update
 sudo apt install -y postgresql-16 postgresql-contrib postgresql-client-16
-
-# Set a password for the default 'postgres' user (needed for the app)
 sudo -u postgres psql -c "ALTER USER postgres PASSWORD 'admin';"
-
-# Create the database using the postgres system user
 sudo -u postgres createdb fire_db
 
 # 4. Configure environment
 cp .env.example .env
-# Edit .env and ensure DATABASE_URL matches the password set above:
+# Edit .env:
 #   DATABASE_URL=postgresql://postgres:admin@localhost:5432/fire_db
 #   DEEPSEEK_API_KEY=sk-your-key
 #   OLLAMA_BASE_URL=http://localhost:11434
 
-# 5. DB Initialization
-# NOTE: Ensure managers.csv and business_units.csv are placed in the `input/` directory
-# alongside the project root before seeding.
+# 5. Seed DB
 python -m database.seed
 
 # 6. Run
