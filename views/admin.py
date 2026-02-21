@@ -350,39 +350,74 @@ def _render_statistics():
                     "AI Type": ai_type,
                     "Assigned": mgr_name,
                     "Office": office_name,
-                    "Summary": (t.ai_analysis_json.get("summary", "—") if isinstance(t.ai_analysis_json, dict) else "—")[:80] + "..." if isinstance(t.ai_analysis_json, dict) and t.ai_analysis_json.get("summary") and len(t.ai_analysis_json.get("summary", "")) > 80 else (t.ai_analysis_json.get("summary", "—") if isinstance(t.ai_analysis_json, dict) else "—"),
-                    "Attachment": "📎 Yes" if t.flags and t.flags.get("attachment_path") else "—"
                 })
             
-            st.dataframe(pd.DataFrame(ticket_rows), use_container_width=True, hide_index=True)
+            # Create DataFrame
+            df_tickets = pd.DataFrame(ticket_rows)
             
-            st.markdown('<div class="fire-divider"></div>', unsafe_allow_html=True)
-            st.markdown("### 🔍 Ticket Inspector")
-            st.caption("Enter a Ticket ID from the table above to view its full details and attachments.")
-            inspect_id = st.number_input("Ticket ID to inspect", min_value=0, step=1, value=0)
-            if inspect_id > 0:
+            # Use on_select to capture row clicks
+            event = st.dataframe(
+                df_tickets,
+                use_container_width=True,
+                hide_index=True,
+                selection_mode="single-row",
+                on_select="rerun"
+            )
+            
+            # Show inspector if a row is selected
+            selected_rows = event.selection.rows
+            if selected_rows:
+                st.markdown('<div class="fire-divider"></div>', unsafe_allow_html=True)
+                st.markdown("### 🔍 Ticket Inspector")
+                
+                # Get the ID from the selected row index
+                row_idx = selected_rows[0]
+                inspect_id = ticket_rows[row_idx]["ID"]
+                
                 inspect_t = db.query(Ticket).filter(Ticket.id == inspect_id).first()
                 if inspect_t:
                     st.markdown(f"**Ticket #{inspect_t.id} — {inspect_t.status}**")
+                    
+                    # Display Client Info if available
+                    if inspect_t.flags and ("client_gender" in inspect_t.flags or "client_age" in inspect_t.flags):
+                        gender = inspect_t.flags.get("client_gender", "Unknown")
+                        age = inspect_t.flags.get("client_age", "Unknown")
+                        st.caption(f"**Client Profile:** {gender}, {age} years old")
+                        
                     colA, colB = st.columns([1, 1])
                     with colA:
                         st.markdown("**Description:**")
-                        st.info(inspect_t.description)
-                        st.markdown("**AI Analysis:**")
-                        st.json(inspect_t.ai_analysis_json if inspect_t.ai_analysis_json else {})
+                        # Strip OCR text from description
+                        clean_desc = inspect_t.description.split('\n\n---')[0]
+                        st.info(clean_desc)
+                        
+                        st.markdown("**AI Analysis Overview:**")
+                        if inspect_t.ai_analysis_json and isinstance(inspect_t.ai_analysis_json, dict):
+                            ai = inspect_t.ai_analysis_json
+                            lines = []
+                            for k, v in ai.items():
+                                if k == "summary":
+                                    continue # Skip summary to save space or show separately if needed
+                                formatted_key = k.replace('_', ' ').title()
+                                lines.append(f"- **{formatted_key}:** {v}")
+                            
+                            st.markdown("\n".join(lines))
+                            if "summary" in ai:
+                                st.markdown(f"**Brief:** {ai['summary']}")
+                        else:
+                            st.caption("No AI analysis available.")
+                            
                     with colB:
                         st.markdown("**Attachment:**")
                         if inspect_t.flags and inspect_t.flags.get("attachment_path"):
                             path = inspect_t.flags.get("attachment_path")
                             import os
                             if os.path.exists(path):
-                                st.image(path, caption=path, use_container_width=True)
+                                st.image(path, caption="Uploaded Image", use_container_width=True)
                             else:
-                                st.warning(f"Attachment file not found at: {path}")
+                                st.warning(f"Attachment file moving/missing.")
                         else:
                             st.caption("No attachment for this ticket.")
-                else:
-                    st.error("Ticket ID not found.")
         else:
             st.caption("No tickets in the system.")
 

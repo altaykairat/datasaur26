@@ -26,6 +26,31 @@ def render_customer():
 
 def _render_create_ticket():
     """Form for creating a new support ticket."""
+    
+    # If we just submitted successfully, show a clean confirmation screen instead of the form
+    if "submitted_ticket" in st.session_state:
+        t_data = st.session_state.pop("submitted_ticket")
+        st.success("✅ **Ticket Submitted Successfully**")
+        st.markdown(f"""
+        - **Ticket ID:** #{t_data['id']}
+        - **Date:** {t_data['date']}
+        - **Status:** {'Assigned to a Manager' if t_data['status'] == 'Assigned' else 'Waiting for Assignment'}
+        
+        **Your Issue:**
+        > {t_data['snippet']}
+        """)
+        
+        st.markdown("<br>", unsafe_allow_html=True)
+        col1, col2 = st.columns([1, 1])
+        with col1:
+            if st.button("Submit Another Ticket", type="primary", use_container_width=True):
+                st.rerun()
+        with col2:
+            st.caption("You can view updates in the 'My Tickets' tab.")
+        
+        return # Stop rendering the form below
+
+    # Otherwise, render the form
     with st.form("create_ticket_form"):
         description = st.text_area(
             "Describe your issue",
@@ -109,15 +134,13 @@ def _render_create_ticket():
                         db.add(ticket)
                         db.commit() # Router flushed but we need to commit the new ticket
                         
-                        if result["assigned_manager_id"]:
-                            st.success(f"Ticket #{ticket.id} created successfully and assigned to **{result['assigned_manager_name']}** at the {result['office_city']} office.")
-                        elif result["ai_analysis"]["type"] == "Спам":
-                            st.error(f"Ticket #{ticket.id} created but flagged as **Spam**.")
-                        else:
-                            st.warning(f"Ticket #{ticket.id} created but could not be routed automatically. A manager will review it shortly.")
-                        
-                        with st.expander("Show AI Analysis Details"):
-                            st.json(result["ai_analysis"])
+                        st.session_state["submitted_ticket"] = {
+                            "id": ticket.id,
+                            "status": result["status"],
+                            "date": ticket.created_at.strftime("%Y-%m-%d %H:%M UTC"),
+                            "snippet": final_description[:100] + "..." if len(final_description) > 100 else final_description
+                        }
+                        st.rerun()
 
 
 def _render_my_tickets():
@@ -146,13 +169,14 @@ def _render_my_tickets():
             if t.ai_analysis_json and isinstance(t.ai_analysis_json, dict):
                 ai_type = t.ai_analysis_json.get("type", "—")
 
+            clean_desc = t.description.split('\n\n---')[0]
             rows.append({
                 "ID": t.id,
                 "Status": t.status,
                 "Type": ai_type,
                 "Assigned To": manager_name,
                 "Created": t.created_at.strftime("%Y-%m-%d %H:%M") if t.created_at else "—",
-                "Description": t.description[:80] + "..." if len(t.description) > 80 else t.description,
+                "Description": clean_desc[:80] + "..." if len(clean_desc) > 80 else clean_desc,
             })
 
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)

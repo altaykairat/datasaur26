@@ -605,13 +605,34 @@ class TicketRouter:
                     guid = str(row.get("GUID клиента", ""))
 
                     flags = {}
+                    
+                    # Extract Gender and Age
+                    gender = str(row.get("Пол клиента", ""))
+                    if gender:
+                        flags["client_gender"] = gender
+                        
+                    dob_raw = str(row.get("Дата рождения", ""))
+                    if dob_raw:
+                        try:
+                            from datetime import datetime
+                            dob_date = datetime.strptime(dob_raw.split()[0], "%Y-%m-%d")
+                            flags["client_age"] = datetime.now().year - dob_date.year
+                        except Exception:
+                            pass
 
                     if is_ocr_available():
                         for img_col in IMAGE_COLUMN_VARIANTS:
                             img_source = row.get(img_col, "")
                             if img_source and str(img_source).strip():
-                                flags["attachment_path"] = str(img_source)
-                                ocr_result = extract_text_from_image(str(img_source))
+                                source_path = str(img_source).strip()
+                                import os
+                                if not os.path.isabs(source_path) and not source_path.startswith("input/attachments"):
+                                    possible_path = os.path.join("input", "attachments", source_path)
+                                    if os.path.exists(possible_path):
+                                        source_path = possible_path
+                                
+                                flags["attachment_path"] = source_path
+                                ocr_result = extract_text_from_image(source_path)
                                 if ocr_result["success"]:
                                     description = combine_description_with_ocr(description, ocr_result["text"])
                                     flags["ocr_extracted"] = True
