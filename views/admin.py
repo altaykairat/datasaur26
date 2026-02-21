@@ -318,3 +318,19 @@ def _render_management():
             db.flush()
             st.success("All manager loads reset to 0.")
             st.rerun()
+
+    st.markdown('<div class="fire-divider"></div>', unsafe_allow_html=True)
+
+    st.markdown("**Clear Tickets**")
+    st.caption("Remove all processed tickets so you can re-upload the same CSV.")
+    col_a, col_b = st.columns(2)
+    with col_a:
+        if st.button("🗑 Clear All Tickets", type="primary"):
+            with get_db() as db:
+                from database.models import RoundRobinState
+                count = db.query(Ticket).delete()
+                db.query(RoundRobinState).delete()
+                db.query(Manager).update({Manager.current_load: 0})
+                db.flush()
+                st.success(f"Cleared {count} tickets + reset loads + RR state.")
+                st.rerun()
