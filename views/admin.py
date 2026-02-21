@@ -231,6 +231,8 @@ def _render_inline_charts(stats: dict):
 
 def _render_statistics():
     """Show persistent statistics from DB."""
+    st.button("🔄 Refresh Data", use_container_width=True)
+    
     with get_db() as db:
         total_tickets = db.query(Ticket).count()
         assigned_tickets = db.query(Ticket).filter(Ticket.status == "Assigned").count()
@@ -309,6 +311,80 @@ def _render_statistics():
                 st.bar_chart(office_df.set_index("Office"))
         else:
             st.caption("No assigned tickets yet.")
+
+        # Detailed Tickets Table
+        st.markdown('<div class="fire-divider"></div>', unsafe_allow_html=True)
+        st.markdown("**All Tickets**")
+        all_tickets = db.query(Ticket).order_by(Ticket.created_at.desc()).limit(200).all()
+        if all_tickets:
+            ticket_rows = []
+            for t in all_tickets:
+                mgr_name = "—"
+                office_name = "—"
+                if t.assigned_manager_id:
+                    mgr = db.query(Manager).filter(Manager.id == t.assigned_manager_id).first()
+                    if mgr:
+                        mgr_name = mgr.name
+                        office_name = mgr.office_location
+                
+                ai_type = "—"
+                if t.ai_analysis_json and isinstance(t.ai_analysis_json, dict):
+                    ai_type = t.ai_analysis_json.get("type", "—")
+                
+                flags_text = "—"
+                if t.flags and isinstance(t.flags, dict):
+                    flags_list = []
+                    for k, v in t.flags.items():
+                        if v is True:
+                            flags_list.append(k.replace('_', ' ').title())
+                        elif v is not False and k != "ocr_chars":
+                            flags_list.append(f"{k.replace('_', ' ').title()}: {v}")
+                    if flags_list:
+                        flags_text = ", ".join(flags_list)
+
+                ticket_rows.append({
+                    "ID": t.id,
+                    "Created": t.created_at.strftime("%Y-%m-%d %H:%M") if t.created_at else "—",
+                    "Status": t.status,
+                    "Segment": t.segment or "—",
+                    "AI Type": ai_type,
+                    "Assigned": mgr_name,
+                    "Office": office_name,
+                    "Summary": (t.ai_analysis_json.get("summary", "—") if isinstance(t.ai_analysis_json, dict) else "—")[:80] + "..." if isinstance(t.ai_analysis_json, dict) and t.ai_analysis_json.get("summary") and len(t.ai_analysis_json.get("summary", "")) > 80 else (t.ai_analysis_json.get("summary", "—") if isinstance(t.ai_analysis_json, dict) else "—"),
+                    "Attachment": "📎 Yes" if t.flags and t.flags.get("attachment_path") else "—"
+                })
+            
+            st.dataframe(pd.DataFrame(ticket_rows), use_container_width=True, hide_index=True)
+            
+            st.markdown('<div class="fire-divider"></div>', unsafe_allow_html=True)
+            st.markdown("### 🔍 Ticket Inspector")
+            st.caption("Enter a Ticket ID from the table above to view its full details and attachments.")
+            inspect_id = st.number_input("Ticket ID to inspect", min_value=0, step=1, value=0)
+            if inspect_id > 0:
+                inspect_t = db.query(Ticket).filter(Ticket.id == inspect_id).first()
+                if inspect_t:
+                    st.markdown(f"**Ticket #{inspect_t.id} — {inspect_t.status}**")
+                    colA, colB = st.columns([1, 1])
+                    with colA:
+                        st.markdown("**Description:**")
+                        st.info(inspect_t.description)
+                        st.markdown("**AI Analysis:**")
+                        st.json(inspect_t.ai_analysis_json if inspect_t.ai_analysis_json else {})
+                    with colB:
+                        st.markdown("**Attachment:**")
+                        if inspect_t.flags and inspect_t.flags.get("attachment_path"):
+                            path = inspect_t.flags.get("attachment_path")
+                            import os
+                            if os.path.exists(path):
+                                st.image(path, caption=path, use_container_width=True)
+                            else:
+                                st.warning(f"Attachment file not found at: {path}")
+                        else:
+                            st.caption("No attachment for this ticket.")
+                else:
+                    st.error("Ticket ID not found.")
+        else:
+            st.caption("No tickets in the system.")
 
 
 def _render_management():

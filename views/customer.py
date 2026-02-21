@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from database.connection import get_db
 from database.models import Ticket, Manager, TicketStatus
 from utils.ocr import extract_text_from_uploaded_file, combine_description_with_ocr, is_ocr_available
+from engine.router import TicketRouter
 
 
 def render_customer():
@@ -44,33 +45,79 @@ def _render_create_ticket():
             final_description = description.strip()
             flags = {}
 
-            # Run OCR on uploaded screenshot
-            if screenshot is not None and is_ocr_available():
-                ocr_result = extract_text_from_uploaded_file(screenshot)
-                if ocr_result["success"]:
-                    final_description = combine_description_with_ocr(final_description, ocr_result["text"])
-                    flags["ocr_extracted"] = True
-                    flags["ocr_chars"] = len(ocr_result["text"])
-                    st.info(f"📸 Extracted {len(ocr_result['text'])} characters from screenshot")
-                else:
-                    flags["ocr_failed"] = ocr_result.get("error", "unknown")
-                    if not final_description:
-                        st.warning("Could not read text from screenshot. Please describe your issue in the text box.")
+            # Save screenshot to disk and run OCR
+            if screenshot is not None:
+                import os, uuid
+                os.makedirs("input/attachments", exist_ok=True)
+                ext = screenshot.name.split('.')[-1] if '.' in screenshot.name else "png"
+                filepath = f"input/attachments/cust_{uuid.uuid4().hex[:8]}.{ext}"
+                with open(filepath, "wb") as f:
+                    f.write(screenshot.getbuffer())
+                flags["attachment_path"] = filepath
+
+                if is_ocr_available():
+                    ocr_result = extract_text_from_uploaded_file(screenshot)
+                    if ocr_result["success"]:
+                        final_description = combine_description_with_ocr(final_description, ocr_result["text"])
+                        flags["ocr_extracted"] = True
+                        flags["ocr_chars"] = len(ocr_result["text"])
+                        st.info(f"📸 Extracted {len(ocr_result['text'])} characters from screenshot")
+                    else:
+                        flags["ocr_failed"] = ocr_result.get("error", "unknown")
+                        if not final_description:
+                            st.warning("Could not read text from screenshot. Please describe your issue in the text box.")
 
             if not final_description:
                 st.error("Please describe your issue or attach a readable screenshot.")
             else:
-                with get_db() as db:
-                    ticket = Ticket(
-                        customer_id=st.session_state["user_id"],
-                        description=final_description,
-                        status=TicketStatus.NEW.value,
-                        flags=flags if flags else None,
-                        created_at=datetime.now(timezone.utc),
-                    )
-                    db.add(ticket)
-                    db.flush()
-                    st.success(f"Ticket #{ticket.id} created successfully.")
+                with st.spinner("Analyzing and routing your ticket..."):
+                    router = TicketRouter(ai_mode="deepseek")  # Or phi4 depending on default
+                    
+                    with get_db() as db:
+                        # Call routing pipeline
+                        result = router.route_single_ticket(
+                            ticket_description=final_description,
+                            segment="Mass", # Default for customer portal
+                            client_city=None, # Optionally get from user profile in future
+                            client_region=None,
+                            ticket_id="",
+                            db=db
+                        )
+                        
+                        # Apply OCR flags as well
+                        if flags:
+                            if result["flags"]:
+                                result["flags"].update(flags)
+                            else:
+                                result["flags"] = flags
+                        
+                        ticket = Ticket(
+                            customer_id=st.session_state["user_id"],
+                            description=final_description,
+                            status=result["status"],
+                            assigned_manager_id=result["assigned_manager_id"],
+                            ai_analysis_json=result["ai_analysis"],
+                            routed_branch_id=result.get("routed_branch_id"),
+                            alternative_branches=result.get("alternative_branches", []),
+                            office_rule=result.get("office_rule"),
+                            routing_trace=result.get("routing_trace"),
+                            flags=result["flags"],
+                            correlation_id=result["correlation_id"],
+                            workload_at_assignment=result.get("workload_at_assignment"),
+                            created_at=datetime.now(timezone.utc),
+                        )
+                        db.add(ticket)
+                        db.commit() # Router flushed but we need to commit the new ticket
+                        
+                        if result["assigned_manager_id"]:
+                            st.success(f"Ticket #{ticket.id} created successfully and assigned to **{result['assigned_manager_name']}** at the {result['office_city']} office.")
+                        elif result["ai_analysis"]["type"] == "Спам":
+                            st.error(f"Ticket #{ticket.id} created but flagged as **Spam**.")
+                        else:
+                            st.warning(f"Ticket #{ticket.id} created but could not be routed automatically. A manager will review it shortly.")
+                        
+                        with st.expander("Show AI Analysis Details"):
+                            st.json(result["ai_analysis"])
 
 
 def _render_my_tickets():

@@ -606,11 +606,11 @@ class TicketRouter:
 
                     flags = {}
 
-                    # ---- OCR: always extract text from screenshots if available ----
                     if is_ocr_available():
                         for img_col in IMAGE_COLUMN_VARIANTS:
                             img_source = row.get(img_col, "")
                             if img_source and str(img_source).strip():
+                                flags["attachment_path"] = str(img_source)
                                 ocr_result = extract_text_from_image(str(img_source))
                                 if ocr_result["success"]:
                                     description = combine_description_with_ocr(description, ocr_result["text"])
