@@ -139,51 +139,73 @@ def _render_ticket_card(ticket: Ticket, db, manager_id: int):
             priority_label = "Low"
 
     with st.expander(f"Ticket #{ticket.id} · {ai_type} · Priority: {priority} ({priority_label})", expanded=False):
-        # AI Summary (if available)
-        summary = ""
-        if ticket.ai_analysis_json and isinstance(ticket.ai_analysis_json, dict):
-            summary = ticket.ai_analysis_json.get("summary", "")
-        if summary:
-            st.markdown(f"**Summary:** {summary}")
+        age = "—"
+        gender = "—"
+        if ticket.flags and isinstance(ticket.flags, dict):
+            age = ticket.flags.get("client_age", "—")
+            gender = ticket.flags.get("client_gender", "—")
 
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4, col5 = st.columns(5)
         with col1:
+            st.caption("Category")
+            st.write(ai_type)
+        with col2:
+            st.caption("Priority")
+            st.write(str(priority))
+        with col3:
             st.caption("Segment")
             st.write(ticket.segment or "—")
-        with col2:
-            st.caption("Sentiment")
-            st.write(sentiment)
-        with col3:
+        with col4:
             st.caption("Status")
             st.write(ticket.status)
-
-        # AI Summary
-        if summary and summary != "—":
-            st.markdown('<div class="fire-divider"></div>', unsafe_allow_html=True)
-            st.caption("AI Summary")
-            st.info(summary)
-
-        # Routing explanation
-        if ticket.routing_trace and isinstance(ticket.routing_trace, dict):
-            st.markdown('<div class="fire-divider"></div>', unsafe_allow_html=True)
-            st.caption("Why Assigned")
-            geo = ticket.routing_trace.get("geo_decision", {})
-            sf = ticket.routing_trace.get("skill_filter", {})
-            rule = geo.get("rule", ticket.office_rule or "—")
-            fallback = sf.get("fallback_used") or "none"
-            st.write(f"Office: **{geo.get('resolved_city', '—')}** (rule: {rule}) · Filter fallback: {fallback}")
-
-        # Flags
-        if ticket.flags and isinstance(ticket.flags, dict):
-            active_flags = [k for k, v in ticket.flags.items() if v]
-            if active_flags:
-                st.caption("Flags")
-                st.code(", ".join(active_flags))
+        with col5:
+            st.caption("Sentiment")
+            st.write(sentiment)
 
         st.markdown('<div class="fire-divider"></div>', unsafe_allow_html=True)
 
+        colA, colB = st.columns(2)
+        with colA:
+            st.caption("Gender")
+            st.write(str(gender))
+        with colB:
+            st.caption("Age")
+            st.write(str(age))
+
+        st.markdown('<div class="fire-divider"></div>', unsafe_allow_html=True)
+
+        st.caption("Full Address")
+        city_str = ticket.client_city or "Unknown City"
+        addr_str = ticket.client_address or "Unknown Street"
+        if addr_str == "—" or addr_str.strip() == ",":
+            addr_str = "No street address provided"
+        st.write(f"{city_str}, {addr_str}")
+
+        st.markdown('<div class="fire-divider"></div>', unsafe_allow_html=True)
+
+        if summary and summary != "—":
+            st.caption("AI Summary")
+            st.write(summary)
+            st.markdown('<div class="fire-divider"></div>', unsafe_allow_html=True)
+
         st.caption("Description")
-        st.text(ticket.description[:500])
+        
+        # Strip OCR text from the end of the description if present
+        desc_text = str(ticket.description).split('\n\n---')[0].strip()
+        
+        if not desc_text or desc_text.lower() == "nan":
+            st.info("No comments provided.")
+        else:
+            st.info(desc_text)
+
+        # Image Attachment
+        if ticket.flags and isinstance(ticket.flags, dict) and ticket.flags.get("attachment_path"):
+            path = ticket.flags.get("attachment_path")
+            import os
+            if os.path.exists(path):
+                st.markdown('<div class="fire-divider"></div>', unsafe_allow_html=True)
+                st.caption("Attached Image")
+                st.image(path, use_container_width=True)
 
         if ticket.status != TicketStatus.CLOSED.value:
             st.markdown('<div class="fire-divider"></div>', unsafe_allow_html=True)
