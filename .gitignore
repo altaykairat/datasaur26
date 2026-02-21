@@ -30,3 +30,9 @@ Thumbs.db
 # Agent/tool metadata
 .agent/
 .gemini/
+
+
+.env
+.env.example
+action_plan.md
+phase1.md
