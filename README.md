@@ -91,17 +91,27 @@ source .venv/bin/activate
 # 2. Install dependencies
 pip install -r requirements.txt
 
-# 3. PostgreSQL — create the database
-createdb -U postgres fire_db
+# 3. PostgreSQL (Ubuntu/Debian instructions)
+# Install PostgreSQL 16 server and client if not installed
+sudo apt update
+sudo apt install -y postgresql-16 postgresql-contrib postgresql-client-16
+
+# Set a password for the default 'postgres' user (needed for the app)
+sudo -u postgres psql -c "ALTER USER postgres PASSWORD 'admin';"
+
+# Create the database using the postgres system user
+sudo -u postgres createdb fire_db
 
 # 4. Configure environment
 cp .env.example .env
-# Edit .env:
-#   DATABASE_URL=postgresql://postgres:YOUR_PASSWORD@localhost:5432/fire_db
+# Edit .env and ensure DATABASE_URL matches the password set above:
+#   DATABASE_URL=postgresql://postgres:admin@localhost:5432/fire_db
 #   DEEPSEEK_API_KEY=sk-your-key
 #   OLLAMA_BASE_URL=http://localhost:11434
 
-# 5. Seed the database (loads managers + offices + creates admin user)
+# 5. DB Initialization
+# NOTE: Ensure managers.csv and business_units.csv are placed in the root directory
+# alongside app.py, not inside an /input/ folder.
 python -m database.seed
 
 # 6. Run

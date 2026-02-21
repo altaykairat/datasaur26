@@ -1,0 +1,39 @@
+# F.I.R.E. Current Routing Pipeline Explanation (As Implemented)
+
+This document explains exactly how the current F.I.R.E. (Freedom Intelligent Routing Engine) pipeline processes a ticket from ingestion to assignment, after the recent edge-case routing updates.
+
+## 1. Ticket Submission & Ingestion
+*   Tickets are ingested via the Streamlit UI, either one by one (Customer panel) or via a bulk CSV upload (Admin panel).
+*   When processing a bulk CSV, the system expects columns like `GUID клиента`, `Описание`, `Сегмент клиента`, `Населённый пункт`, and `Область`.
+*   The raw ticket is passed to the `engine.router.TicketRouter` for processing.
+
+## 2. Artificial Intelligence Enrichment
+*   The raw text (`Описание`) is sent to the `IntelligenceEngine` (`engine/intelligence.py`).
+*   Using either the DeepSeek API or a local Phi-4 LLM, the system extracts 5 structured fields:
+    1.  **Type** (e.g., "Жалоба", "Смена данных")
+    2.  **Priority** (1-10)
+    3.  **Language** (RU, KZ, ENG)
+    4.  **Sentiment** (Positive, Neutral, Negative)
+    5.  **Normalized Address** (Standardized address extracted from the text).
+
+## 3. Geo-Routing (Office Selection)
+The system determines the optimal physical branch office (`utils/geo.py` & `engine/router.py`) through a cascading set of rules:
+*   **A. Resolution Method:** The engine tries to map the user-provided city/region, or the AI-extracted normalized address, to a known city coordinate. It tries exact matching, fuzzy text matching (70% similarity), and finally region-based fallback (e.g., matching "Алматинская обл." to "Алматы").
+*   **B. Direct Match:** If the resolved city is one of the 16 physical office locations, it is selected immediately (`rule="exact_match"`).
+*   **C. Nearest Distance calculation:** If the city is recognized but doesn't have an office, it calculates the Haversine distance to all 16 offices. It picks the nearest one (`rule="nearest_office_dist_X"`).
+*   **D. Tie-Breaker Handling:** If two offices are exactly the same distance away, the system explicitly breaks the tie by choosing the office name that comes first alphabetically.
+*   **E. Deterministic Fallback 50/50:** If the address is completely unknown, couldn't be geocoded, or the nearest office is >500km away (e.g. a foreign address), it triggers a fallback rule (`rule="split_50_50"`). Instead of randomly guessing, it hashes the ticket ID (using MD5) and uses modulo 2 division to consistently route that specific ticket ID either to "Астана" or "Алматы" every time.
+
+## 4. Skills Filter
+Once the target office is established, the engine filters the available managers in that office based on **Hard Rules**:
+*   If the ticket segment is **VIP**, the manager must have the "VIP" skill.
+*   If the ticket type is **"Смена данных"**, the manager's role must be exactly "Главный специалист".
+*   If the ticket language is **KZ** or **ENG**, the manager must possess that specific language skill.
+*   **Fallback 1:** If no manager in the office fits all hard rules, it relaxes and tries to find *any* manager in that office.
+*   **Fallback 2:** If the office has zero eligible managers entirely, it expands its search globally and pulls the top 5 managers with the lowest workload across the entire company.
+
+## 5. Load Balancing & Database Assignment
+*   After filtering, the remaining candidate pool is sorted by their `current_load` (ascending).
+*   The system takes the top 2 managers with the absolute lowest workload.
+*   It selects one of them randomly (Round-Robin approximation within the absolute lowest tier) to prevent overwhelming a single person.
+*   The ticket is saved to the PostgreSQL `fire_db` database as `ASSIGNED` with its full AI analysis JSON, the manager's ID, and the explicit `office_rule` flag indicating exactly how its geography was determined. The chosen manager's `current_load` is incremented by 1.

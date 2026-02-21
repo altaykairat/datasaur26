@@ -1,5 +1,5 @@
-"""Ticket Routing Engine — geo-routing, skill filtering, load balancing."""
 import random
+import hashlib
 from typing import Optional
 
 import pandas as pd
@@ -29,7 +29,7 @@ class TicketRouter:
 
     def route_single_ticket(self, ticket_description: str, segment: str = "Mass",
                             client_city: str = None, client_region: str = None,
-                            db=None) -> dict:
+                            ticket_id: str = "", db=None) -> dict:
         """
         Route a single ticket through the full pipeline.
 
@@ -50,7 +50,9 @@ class TicketRouter:
             offices = self._load_offices(db)
 
             # 1. Geo-routing
-            office_city = self._geo_route(ai_analysis, client_city, client_region, offices)
+            geo_res = self._geo_route(ai_analysis, client_city, client_region, offices, ticket_id)
+            office_city = geo_res["city"]
+            office_rule = geo_res["rule"]
 
             # 2. Skill filter
             candidates = self._skill_filter(
@@ -69,6 +71,7 @@ class TicketRouter:
                 "assigned_manager_id": manager.id if manager else None,
                 "assigned_manager_name": manager.name if manager else "Unassigned",
                 "office_city": office_city,
+                "office_rule": office_rule,
             }
 
             if db_ctx:
@@ -84,41 +87,51 @@ class TicketRouter:
                 db.close()
 
     def _geo_route(self, ai_analysis: dict, client_city: str,
-                   client_region: str, offices: list[dict]) -> str:
+                   client_region: str, offices: list[dict], ticket_id: str) -> dict:
         """
         Step 1: Determine which office city to route to.
 
         Rules:
         - Find nearest office by Haversine distance.
-        - If distance > 500km or address unknown → random Astana/Almaty.
+        - If distance > 500km or address unknown → deterministic Astana/Almaty.
         """
+        def fallback_50_50(tid: str) -> dict:
+            # Deterministic hash to split 50/50
+            tid_str = str(tid) if tid else "default"
+            num = int(hashlib.md5(tid_str.encode()).hexdigest(), 16)
+            city = "Астана" if num % 2 == 0 else "Алматы"
+            return {"city": city, "rule": "split_50_50"}
+
         # Try to resolve the city from AI analysis or input
-        resolved = resolve_city(client_city, client_region)
+        resolved_dict = resolve_city(client_city, client_region)
 
         # Also try AI-extracted address
-        if not resolved:
+        if not resolved_dict:
             ai_addr = ai_analysis.get("normalized_address", "Unknown")
             if ai_addr and ai_addr != "Unknown":
                 # Try to extract city from the AI address
                 parts = ai_addr.split(",")
                 if parts:
-                    resolved = resolve_city(parts[0].strip())
+                    resolved_dict = resolve_city(parts[0].strip())
 
-        if not resolved:
-            # Fallback: random Astana/Almaty
-            return random.choice(["Астана", "Алматы"])
+        if not resolved_dict:
+            # Fallback: deterministic Astana/Almaty
+            return fallback_50_50(ticket_id)
+
+        resolved_city_name = resolved_dict["city"]
+        resolved_rule = resolved_dict["rule"]
 
         # If the resolved city IS an office city, use it directly
-        if resolved in [o["city"] for o in offices]:
-            return resolved
+        if resolved_city_name in [o["city"] for o in offices]:
+            return {"city": resolved_city_name, "rule": resolved_rule}
 
         # Otherwise, find nearest office
-        nearest_city, distance = find_nearest_office(resolved, offices)
+        nearest_city, distance = find_nearest_office(resolved_city_name, offices)
 
         if nearest_city is None or distance > 500:
-            return random.choice(["Астана", "Алматы"])
+            return fallback_50_50(ticket_id)
 
-        return nearest_city
+        return {"city": nearest_city, "rule": f"nearest_office_dist_{int(distance)}"}
 
     def _skill_filter(self, db, office_city: str, segment: str,
                       ticket_type: str, language: str) -> list[Manager]:
@@ -211,11 +224,15 @@ class TicketRouter:
                 city = str(row.get("Населённый пункт", "") or "")
                 region = str(row.get("Область", "") or "")
 
+                guid = str(row.get("GUID клиента", ""))
+
                 # AI Enrichment
                 ai_analysis = self.ai_engine.analyze_ticket(description)
 
                 # Geo-routing
-                office_city = self._geo_route(ai_analysis, city, region, offices)
+                geo_res = self._geo_route(ai_analysis, city, region, offices, guid)
+                office_city = geo_res["city"]
+                office_rule = geo_res["rule"]
 
                 # Skill filter
                 candidates = self._skill_filter(
@@ -237,6 +254,7 @@ class TicketRouter:
                     "ai_sentiment": ai_analysis["sentiment"],
                     "ai_address": ai_analysis["normalized_address"],
                     "routed_office": office_city,
+                    "office_rule": office_rule,
                     "assigned_manager": manager.name if manager else "Unassigned",
                     "assigned_manager_id": manager.id if manager else None,
                     "segment": segment,

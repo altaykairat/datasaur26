@@ -87,12 +87,12 @@ def haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return R * c
 
 
-def resolve_city(city_name: str, region: str = None) -> str | None:
+def resolve_city(city_name: str, region: str = None) -> dict | None:
     """
     Try to resolve a city name into an office city.
 
     First tries exact match, then fuzzy match, then region-based lookup.
-    Returns the office city name or None if no match.
+    Returns a dict with 'city' and 'rule' keys, or None if no match.
     """
     if not city_name and not region:
         return None
@@ -103,22 +103,22 @@ def resolve_city(city_name: str, region: str = None) -> str | None:
 
         # Direct match in office cities
         if city_name in OFFICE_CITIES:
-            return city_name
+            return {"city": city_name, "rule": "exact_match"}
 
         # Check if it exists in our coordinates (non-office city)
         if city_name in CITY_COORDINATES:
-            return city_name  # We know the coords, can find nearest office
+            return {"city": city_name, "rule": "coordinate_match"}  # We know the coords, can find nearest office
 
         # Fuzzy match against office cities
         matches = get_close_matches(city_name, OFFICE_CITIES, n=1, cutoff=0.7)
         if matches:
-            return matches[0]
+            return {"city": matches[0], "rule": "fuzzy_match"}
 
     # Try region-based fallback
     if region:
         region = region.strip()
         if region in REGION_TO_CITY:
-            return REGION_TO_CITY[region]
+            return {"city": REGION_TO_CITY[region], "rule": "region_fallback"}
 
     return None
 
@@ -148,5 +148,9 @@ def find_nearest_office(city_name: str, offices: list[dict]) -> tuple[str, float
         if dist < best_dist:
             best_dist = dist
             best_office = office["city"]
+        elif dist == best_dist and best_office:
+            # Tie breaker: alphabetical office name
+            if office["city"] < best_office:
+                best_office = office["city"]
 
     return best_office, best_dist
