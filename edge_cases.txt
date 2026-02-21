@@ -1,0 +1,95 @@
+EDGE CASES / SAFETY CASES / MINOR LOGICS (FIRE PIPELINE)
+
+1. geo position & routing:
+    - nearest location office
+    bonus:
+    - route to office
+    - cost of travel to the locations, Dijkstra algorithm
+        - if outside of country client, use google maps api
+        - if inside of country client, use openrouteservice api
+        - for inside of country client: conisder time, quality of road, traffic and overall cost
+
+2. chat with user to manager:
+    - if the priority is low, possible online solution with/without online chat in UI
+
+3. Several managers per city:
+    - allocate client by: 
+        - segment
+        - priority
+        - manager's current load
+    - allocate free manager to online solution
+
+4. INGESTION / DATA QUALITY
+
+    - Missing required CSV columns or wrong types:
+        - reject batch or mark rows as invalid; log clear error.
+    - Duplicate ticket_id:
+        - idempotent upsert (keep latest/first by rule); log duplicate_ticket_id.
+    - Broken joins (ticket references missing manager/office keys), null IDs:
+        - mark ticket needs_data_fix; do not route until fixed.
+    - Corrupted row / encoding issues:
+        - skip row + log row number; continue processing remaining rows (partial success).
+
+5. AI ENRICHMENT (LLM ROBUSTNESS)
+
+    - LLM timeout / unavailable:
+        - fallback analytics; set ai_fallback=true.
+        - Defaults example: language=RU, sentiment=Neutral, priority=5, type=Consultation (or App Failure), generic summary.
+    - Invalid JSON / schema mismatch from LLM:
+        - validate + retry once; if still invalid -> fallback analytics; log ai_schema_error.
+    - Ambiguous language:
+        - set RU by default; set language_confidence=low.
+    - Empty text + missing attachment:
+        - needs_clarification flag; lower priority (e.g., 3–4); route to general queue.
+    - Prompt injection / malicious instructions inside ticket text:
+        - hard-validate enums and numeric ranges; ignore ticket instructions; never allow ticket text to override routing rules.
+
+6. GEO / OFFICE SELECTION
+
+    - Unknown address / cannot geocode:
+        - spec fallback 50/50 split Astana vs Almaty (use deterministic hash(ticket_id)%2).
+    - Address outside Kazakhstan (abroad):
+        - same 50/50 fallback.
+    - Tie in nearest office distance:
+        - deterministic tie-break (lowest office_id or alphabetical office name).
+    - Missing office coordinates:
+        - exclude that office from distance calc; if all missing -> 50/50 fallback.
+
+7. ELIGIBILITY FILTERING (HARD RULES)
+
+    - No eligible managers after applying VIP/Chief/KZ/ENG constraints:
+        - do NOT relax hard rules; put into escalation/unassigned queue; log no_eligible_manager with reason list.
+    - Manager skill fields missing/null:
+        - treat as skill absent (conservative).
+    - Manager inactive / on leave (if supported):
+        - exclude from candidates (requires is_active flag or config list).
+    - VIP segment but zero VIP-skilled managers:
+        - escalation/unassigned; do not assign to non-VIP.
+
+8. LOAD BALANCING + ROUND ROBIN CORRECTNESS
+
+    - More than 2 managers share minimal load:
+        - pick two deterministically (sort by load, then manager_id).
+    - Invalid load values (missing/negative):
+        - coerce to large value or exclude; log invalid_load.
+    - RR state missing (first run):
+        - initialize pointer deterministically (e.g., 0).
+    - Concurrency (simultaneous assignments):
+        - DB transaction + row-level lock on rr_state to ensure atomic RR updates.
+
+9. OPERATIONAL SAFETY / AUDITABILITY
+
+    - SLA <= 10 seconds risk:
+        - cache AI enrichment per ticket; timebox LLM call; fallback on timeout; avoid repeated LLM calls on UI refresh.
+    - Full traceability requirement:
+        - store routing_trace in DB (geo decision, applied filters, candidate loads, RR pointer, assigned manager).
+    - PII handling:
+        - avoid logging raw addresses; store normalized address + geo coords; redact in UI logs if needed.
+
+DETERMINISTIC “MINOR” RULES (IMPORTANT FOR JUDGES)
+
+    - Stable ordering/tie-breaks (office_id, manager_id).
+    - Deterministic 50/50 fallback using hash(ticket_id).
+    - Strict schema validation for LLM outputs (enums + priority 1–10).
+    - Explicit “unassigned/escalation” state (never silent failure).
+    - Single source of truth for routing rules (central routing module).
