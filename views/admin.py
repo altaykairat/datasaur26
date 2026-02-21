@@ -143,7 +143,7 @@ def _run_batch_routing(df: pd.DataFrame, ai_mode: str):
         # Results table
         st.markdown('<div class="fire-divider"></div>', unsafe_allow_html=True)
         st.markdown("**Routing Results**")
-        display_cols = ["ai_type", "ai_priority", "ai_language", "ai_sentiment", "ai_summary",
+        display_cols = ["client_guid", "ai_type", "ai_priority", "ai_language", "ai_sentiment", "ai_summary",
                         "routed_office", "office_rule", "assigned_manager", "segment", "status"]
         available_cols = [c for c in display_cols if c in results_df.columns]
         st.dataframe(results_df[available_cols], use_container_width=True, hide_index=True)

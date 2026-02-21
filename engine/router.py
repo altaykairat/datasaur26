@@ -510,6 +510,7 @@ class TicketRouter:
                             flags["duplicate_ticket_id"] = True
                             result = {
                                 "ticket_index": idx,
+                                "client_guid": guid,
                                 "ai_type": ai_json.get("type", ""),
                                 "ai_priority": ai_json.get("priority", 5),
                                 "ai_language": ai_json.get("language", ""),
@@ -546,6 +547,7 @@ class TicketRouter:
                         flags["spam_detected"] = True
                         result = {
                             "ticket_index": idx,
+                            "client_guid": guid,
                             "ai_type": ai_analysis["type"],
                             "ai_priority": ai_analysis["priority"],
                             "ai_language": ai_analysis["language"],
@@ -622,6 +624,7 @@ class TicketRouter:
 
                     result = {
                         "ticket_index": idx,
+                        "client_guid": guid,
                         "ai_type": ai_analysis["type"],
                         "ai_priority": ai_analysis["priority"],
                         "ai_language": ai_analysis["language"],
@@ -662,6 +665,7 @@ class TicketRouter:
                     logger.error(f"Row {idx} failed: {e}")
                     result = {
                         "ticket_index": idx,
+                        "client_guid": guid,
                         "ai_type": "",
                         "ai_priority": 0,
                         "ai_language": "",
