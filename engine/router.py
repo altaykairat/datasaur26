@@ -11,7 +11,7 @@ from database.models import (
     Manager, Ticket, Office, TicketStatus, RoundRobinState,
 )
 from engine.intelligence import IntelligenceEngine
-from utils.geo import find_nearest_branch, find_nearest_office, resolve_city, OFFICE_CITIES
+from utils.geo import find_nearest_branch, resolve_city, OFFICE_CITIES
 from utils.ocr import extract_text_from_image, is_ocr_available, combine_description_with_ocr
 
 logger = get_safe_logger(__name__)
