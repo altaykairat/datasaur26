@@ -109,6 +109,10 @@ class TicketRouter:
         if not resolved_dict:
             return fallback_50_50(ticket_id, "address_unknown")
 
+        # If Nominatim detected a foreign address → immediate 50/50 fallback
+        if resolved_dict.get("is_foreign"):
+            return fallback_50_50(ticket_id, "foreign_country")
+
         resolved_city_name = resolved_dict["city"]
         resolved_rule = resolved_dict["rule"]
 

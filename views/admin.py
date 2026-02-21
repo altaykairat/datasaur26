@@ -50,23 +50,6 @@ def _render_batch_routing():
 
     st.markdown('<div class="fire-divider"></div>', unsafe_allow_html=True)
 
-    # Reset routing data
-    with st.expander("🗑️ Reset Routing Data", expanded=False):
-        st.caption("Delete all tickets, reset manager loads, and clear round-robin state. This allows re-uploading tickets.csv without duplicates.")
-        confirm = st.checkbox("I confirm I want to erase all routing data", key="reset_confirm")
-        if st.button("Reset All Routing Data", disabled=not confirm, type="secondary"):
-            with get_db() as db:
-                deleted = db.query(Ticket).delete()
-                db.query(RoundRobinState).delete()
-                db.query(Manager).update({"current_load": 0})
-                db.flush()
-            st.session_state["last_routing_results"] = None
-            st.session_state["last_routing_stats"] = None
-            st.success(f"Deleted {deleted} tickets, reset all manager loads to 0.")
-            st.rerun()
-
-    st.markdown('<div class="fire-divider"></div>', unsafe_allow_html=True)
-
     # File uploader
     uploaded_file = st.file_uploader(
         "Upload tickets CSV",

@@ -1,6 +1,20 @@
-"""Geo utilities: Haversine distance calculation and city matching."""
+"""Geo utilities: Haversine distance calculation, city matching, and Nominatim fallback."""
 import math
+import logging
 from difflib import get_close_matches
+
+try:
+    from geopy.geocoders import Nominatim
+    from geopy.exc import GeocoderTimedOut, GeocoderServiceError
+    _GEOPY_AVAILABLE = True
+except ImportError:
+    _GEOPY_AVAILABLE = False
+
+logger = logging.getLogger("fire.geo")
+
+# Kazakhstan bounding box (generous)
+_KZ_LAT_MIN, _KZ_LAT_MAX = 40.0, 56.0
+_KZ_LON_MIN, _KZ_LON_MAX = 46.0, 88.0
 
 # Hardcoded coordinates for all Kazakhstan cities referenced in the project.
 # These cover the 16 office cities + common variations from ticket addresses.
@@ -87,12 +101,58 @@ def haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return R * c
 
 
+def is_in_kazakhstan(lat: float, lon: float) -> bool:
+    """Check if coordinates fall within Kazakhstan's bounding box."""
+    return _KZ_LAT_MIN <= lat <= _KZ_LAT_MAX and _KZ_LON_MIN <= lon <= _KZ_LON_MAX
+
+
+def geocode_nominatim(city_name: str) -> dict | None:
+    """
+    Geocode a city name via Nominatim (OpenStreetMap).
+
+    Returns dict with 'lat', 'lon', 'country_code', 'display_name'
+    or None if lookup fails.
+    """
+    if not _GEOPY_AVAILABLE or not city_name:
+        return None
+
+    try:
+        geolocator = Nominatim(user_agent="fire_routing_system", timeout=5)
+        location = geolocator.geocode(city_name, language="ru", exactly_one=True)
+        if location:
+            country_code = ""
+            if hasattr(location, 'raw') and 'display_name' in location.raw:
+                # Nominatim returns country as last part of display_name
+                parts = location.raw['display_name'].split(',')
+                country_code = parts[-1].strip().lower() if parts else ""
+
+            return {
+                "lat": location.latitude,
+                "lon": location.longitude,
+                "country_code": country_code,
+                "display_name": location.address,
+            }
+    except (GeocoderTimedOut, GeocoderServiceError) as e:
+        logger.warning(f"Nominatim geocoding failed for '{city_name}': {e}")
+    except Exception as e:
+        logger.warning(f"Nominatim unexpected error for '{city_name}': {e}")
+
+    return None
+
+
 def resolve_city(city_name: str, region: str = None) -> dict | None:
     """
-    Try to resolve a city name into an office city.
+    Try to resolve a city name into a known city with coordinates.
 
-    First tries exact match, then fuzzy match, then region-based lookup.
+    Resolution order:
+    1. Exact match in office cities
+    2. Exact match in CITY_COORDINATES
+    3. Fuzzy match against office cities
+    4. Region-based lookup
+    5. Nominatim geocoding (if geopy available)
+
     Returns a dict with 'city' and 'rule' keys, or None if no match.
+    For Nominatim results: also includes 'lat', 'lon', 'is_foreign'.
     """
     if not city_name and not region:
         return None
@@ -107,7 +167,7 @@ def resolve_city(city_name: str, region: str = None) -> dict | None:
 
         # Check if it exists in our coordinates (non-office city)
         if city_name in CITY_COORDINATES:
-            return {"city": city_name, "rule": "coordinate_match"}  # We know the coords, can find nearest office
+            return {"city": city_name, "rule": "coordinate_match"}
 
         # Fuzzy match against office cities
         matches = get_close_matches(city_name, OFFICE_CITIES, n=1, cutoff=0.7)
@@ -119,6 +179,35 @@ def resolve_city(city_name: str, region: str = None) -> dict | None:
         region = region.strip()
         if region in REGION_TO_CITY:
             return {"city": REGION_TO_CITY[region], "rule": "region_fallback"}
+
+    # Nominatim fallback — resolve unknown cities via OpenStreetMap
+    if city_name:
+        geo_result = geocode_nominatim(city_name)
+        if geo_result:
+            lat, lon = geo_result["lat"], geo_result["lon"]
+
+            if not is_in_kazakhstan(lat, lon):
+                # Foreign address — will be routed to Astana/Almaty
+                logger.info(f"Foreign city detected: '{city_name}' → {geo_result['display_name']}")
+                return {
+                    "city": city_name,
+                    "rule": "nominatim_foreign",
+                    "lat": lat,
+                    "lon": lon,
+                    "is_foreign": True,
+                }
+
+            # In Kazakhstan — store coords so find_nearest_office can use them
+            logger.info(f"Nominatim resolved: '{city_name}' → ({lat}, {lon})")
+            # Temporarily add to CITY_COORDINATES for this session
+            CITY_COORDINATES[city_name] = (lat, lon)
+            return {
+                "city": city_name,
+                "rule": "nominatim_kz",
+                "lat": lat,
+                "lon": lon,
+                "is_foreign": False,
+            }
 
     return None
 
@@ -136,7 +225,13 @@ def find_nearest_office(city_name: str, offices: list[dict]) -> tuple[str, float
     """
     coords = CITY_COORDINATES.get(city_name)
     if not coords:
-        return None, -1
+        # Try Nominatim as a last resort
+        geo_result = geocode_nominatim(city_name)
+        if geo_result and is_in_kazakhstan(geo_result["lat"], geo_result["lon"]):
+            coords = (geo_result["lat"], geo_result["lon"])
+            CITY_COORDINATES[city_name] = coords  # Cache for this session
+        else:
+            return None, -1
 
     client_lat, client_lon = coords
 
