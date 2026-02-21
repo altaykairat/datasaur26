@@ -45,7 +45,7 @@ def _clean_row(row: dict) -> dict:
 
 def seed_managers(db):
     """Load managers from managers.csv."""
-    csv_path = os.path.join(PROJECT_ROOT, "managers.csv")
+    csv_path = os.path.join(PROJECT_ROOT, "input", "managers.csv")
     if not os.path.exists(csv_path):
         print(f"[WARN] managers.csv not found at {csv_path}")
         return 0
@@ -87,7 +87,7 @@ def seed_managers(db):
 
 def seed_offices(db):
     """Load offices from business_units.csv with hardcoded coordinates."""
-    csv_path = os.path.join(PROJECT_ROOT, "business_units.csv")
+    csv_path = os.path.join(PROJECT_ROOT, "input", "business_units.csv")
     if not os.path.exists(csv_path):
         print(f"[WARN] business_units.csv not found at {csv_path}")
         return 0

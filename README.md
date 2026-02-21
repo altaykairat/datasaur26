@@ -110,8 +110,8 @@ cp .env.example .env
 #   OLLAMA_BASE_URL=http://localhost:11434
 
 # 5. DB Initialization
-# NOTE: Ensure managers.csv and business_units.csv are placed in the root directory
-# alongside app.py, not inside an /input/ folder.
+# NOTE: Ensure managers.csv and business_units.csv are placed in the `input/` directory
+# alongside the project root before seeding.
 python -m database.seed
 
 # 6. Run

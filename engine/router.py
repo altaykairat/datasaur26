@@ -36,7 +36,17 @@ class TicketRouter:
         Returns dict with: ai_analysis, assigned_manager_id, assigned_manager_name, office_city.
         """
         # Step A: AI Enrichment
-        ai_analysis = self.ai_engine.analyze_ticket(ticket_description)
+        try:
+            ai_analysis = self.ai_engine.analyze_ticket(ticket_description)
+        except Exception:
+            ai_analysis = {
+                "type": "Консультация",
+                "priority": 5,
+                "language": "RU",
+                "sentiment": "Нейтральный",
+                "normalized_address": "Unknown",
+                "ai_fallback": True
+            }
 
         # Step B: Routing
         should_close = db is not None
@@ -183,6 +193,8 @@ class TicketRouter:
 
         # If still empty, global fallback
         if not filtered:
+            if segment and segment.upper() == "VIP":
+                return [] # VIP segment but zero VIP-skilled managers -> do not assign to non-VIP
             filtered = db.query(Manager).order_by(Manager.current_load.asc()).limit(5).all()
 
         return filtered
@@ -196,11 +208,11 @@ class TicketRouter:
         if not candidates:
             return None
 
-        sorted_candidates = sorted(candidates, key=lambda m: m.current_load)
+        # Sort by current_load ascending, then by manager ID for determinism
+        sorted_candidates = sorted(candidates, key=lambda m: (m.current_load, m.id))
 
-        # Pick from top 2 (or top 1 if only one)
-        top = sorted_candidates[:min(2, len(sorted_candidates))]
-        return random.choice(top)
+        # Pick the absolute best deterministically
+        return sorted_candidates[0]
 
     def route_batch(self, df: pd.DataFrame, progress_callback=None) -> pd.DataFrame:
         """
@@ -226,8 +238,43 @@ class TicketRouter:
 
                 guid = str(row.get("GUID клиента", ""))
 
+                # Idempotency Check
+                if guid:
+                    existing = db.query(Ticket).filter(Ticket.client_guid == guid).first()
+                    if existing:
+                        # Skip processing, return logged duplicate
+                        ai_json = existing.ai_analysis_json or {}
+                        result = {
+                            "ticket_index": idx,
+                            "ai_type": ai_json.get("type", ""),
+                            "ai_priority": ai_json.get("priority", 5),
+                            "ai_language": ai_json.get("language", ""),
+                            "ai_sentiment": ai_json.get("sentiment", ""),
+                            "ai_address": ai_json.get("normalized_address", "Unknown"),
+                            "routed_office": existing.client_city,
+                            "office_rule": "duplicate_skipped",
+                            "assigned_manager": "Unassigned", # Kept simple for duplicate reporting
+                            "assigned_manager_id": existing.assigned_manager_id,
+                            "segment": existing.segment,
+                            "status": "DUPLICATE",
+                        }
+                        results.append(result)
+                        if progress_callback:
+                            progress_callback(idx + 1, total, result)
+                        continue
+
                 # AI Enrichment
-                ai_analysis = self.ai_engine.analyze_ticket(description)
+                try:
+                    ai_analysis = self.ai_engine.analyze_ticket(description)
+                except Exception:
+                    ai_analysis = {
+                        "type": "Консультация",
+                        "priority": 5,
+                        "language": "RU",
+                        "sentiment": "Нейтральный",
+                        "normalized_address": "Unknown",
+                        "ai_fallback": True
+                    }
 
                 # Geo-routing
                 geo_res = self._geo_route(ai_analysis, city, region, offices, guid)
