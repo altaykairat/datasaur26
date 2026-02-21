@@ -92,6 +92,7 @@ def _run_batch_routing(df: pd.DataFrame, ai_mode: str):
         "assigned": 0,
         "unassigned": 0,
         "spam": 0,
+        "duplicates": 0,
         "by_city": {},
         "by_type": {},
         "by_sentiment": {},
@@ -99,9 +100,21 @@ def _run_batch_routing(df: pd.DataFrame, ai_mode: str):
 
     def progress_callback(current, total, result):
         live_stats["processed"] = current
-        if result.get("status") == "Spam":
+
+        status = result.get("status", "")
+        manager = result.get("assigned_manager", "")
+
+        # Skip duplicates and dead-letter rows from stats
+        if status in ("DUPLICATE", "DeadLetter"):
+            live_stats["duplicates"] += 1
+            pct = current / total
+            progress_bar.progress(pct)
+            status_text.caption(f"Ticket {current}/{total} · Skipped ({status}) · Duplicates: {live_stats['duplicates']}")
+            return
+
+        if status == "Spam":
             live_stats["spam"] += 1
-        elif result["assigned_manager"] not in ("Unassigned", "Spam"):
+        elif manager not in ("Unassigned", "Spam", "Spam — not assigned", "Error"):
             live_stats["assigned"] += 1
         else:
             live_stats["unassigned"] += 1
@@ -122,7 +135,7 @@ def _run_batch_routing(df: pd.DataFrame, ai_mode: str):
             f"Assigned: {live_stats['assigned']} · "
             f"Spam: {live_stats['spam']} · "
             f"Unassigned: {live_stats['unassigned']} · "
-            f"{city} → {result['assigned_manager']}"
+            f"{city} → {manager}"
         )
 
     try:
@@ -132,10 +145,24 @@ def _run_batch_routing(df: pd.DataFrame, ai_mode: str):
         elapsed = time.time() - start_time
 
         progress_bar.progress(1.0)
-        status_text.markdown(
-            f"**Done.** {total} tickets in {elapsed:.1f}s ({elapsed/total:.1f}s per ticket) · "
-            f"Assigned: {live_stats['assigned']} · Spam: {live_stats['spam']} · Unassigned: {live_stats['unassigned']}"
-        )
+
+        dupes = live_stats['duplicates']
+        if dupes > 0 and dupes == total:
+            status_text.markdown(
+                f"⚠️ **All {total} tickets were duplicates** (already in DB). "
+                f"Go to **Management → Clear All Tickets** first, then re-upload."
+            )
+        elif dupes > 0:
+            status_text.markdown(
+                f"**Done.** {total} tickets in {elapsed:.1f}s · "
+                f"Assigned: {live_stats['assigned']} · Spam: {live_stats['spam']} · "
+                f"Unassigned: {live_stats['unassigned']} · ⚠️ Duplicates skipped: {dupes}"
+            )
+        else:
+            status_text.markdown(
+                f"**Done.** {total} tickets in {elapsed:.1f}s ({elapsed/total:.1f}s per ticket) · "
+                f"Assigned: {live_stats['assigned']} · Spam: {live_stats['spam']} · Unassigned: {live_stats['unassigned']}"
+            )
 
         st.session_state["last_routing_results"] = results_df
         st.session_state["last_routing_stats"] = live_stats
