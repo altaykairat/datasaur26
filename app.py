@@ -22,39 +22,19 @@ st.set_page_config(
 )
 
 
-def _get_theme():
-    """Get current theme from session state."""
-    if "theme" not in st.session_state:
-        st.session_state["theme"] = "light"
-    return st.session_state["theme"]
-
-
-def _apply_theme():
-    """Apply CSS based on current theme setting."""
-    theme = _get_theme()
-
-    if theme == "dark":
-        bg = "#0F1117"
-        bg_secondary = "#1E1E2E"
-        border = "#2D2D3F"
-        text_primary = "#F3F4F6"
-        text_secondary = "#9CA3AF"
-        sidebar_bg = "#111827"
-        sidebar_border = "#1F2937"
-        card_bg = "#1E1E2E"
-        input_bg = "#1E1E2E"
-        banner_bg = "#1E293B"
-    else:
-        bg = "#FFFFFF"
-        bg_secondary = "#F8F9FA"
-        border = "#E5E7EB"
-        text_primary = "#111827"
-        text_secondary = "#6B7280"
-        sidebar_bg = "#F9FAFB"
-        sidebar_border = "#E5E7EB"
-        card_bg = "#FFFFFF"
-        input_bg = "#F9FAFB"
-        banner_bg = "#F0F4FF"
+def _inject_css():
+    """Inject custom CSS for the locked Light Theme."""
+    # Hardcoded beautiful Light Theme Colors
+    bg = "#FFFFFF"
+    bg_secondary = "#F8F9FA"
+    border = "#E5E7EB"
+    text_primary = "#111827"
+    text_secondary = "#6B7280"
+    sidebar_bg = "#F9FAFB"
+    sidebar_border = "#E5E7EB"
+    card_bg = "#FFFFFF"
+    input_bg = "#F9FAFB"
+    banner_bg = "#F0F4FF"
 
     accent = "#F59E0B"
     accent_hover = "#D97706"
@@ -63,27 +43,17 @@ def _apply_theme():
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
 
-        /* ---- Force Streamlit core backgrounds ---- */
-        .stApp,
-        [data-testid="stAppViewContainer"],
-        [data-testid="stMain"],
-        .main .block-container {{
-            background-color: {bg} !important;
-            color: {text_primary} !important;
+        /* ---- Apply font family and core backgrounds ---- */
+        html, body, [class*="css"] {{
             font-family: 'Inter', sans-serif;
         }}
-
-        [data-testid="stHeader"] {{
+        
+        .stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"] {{
             background-color: {bg} !important;
+            color: {text_primary} !important;
         }}
 
-        [data-testid="stBottom"] {{
-            background-color: {bg} !important;
-        }}
-
-        /* ---- Sidebar ---- */
-        [data-testid="stSidebar"],
-        [data-testid="stSidebar"] > div:first-child {{
+        [data-testid="stSidebar"], [data-testid="stSidebar"] > div:first-child {{
             background: {sidebar_bg} !important;
             border-right: 1px solid {sidebar_border};
         }}
@@ -98,37 +68,15 @@ def _apply_theme():
             color: {text_secondary} !important;
         }}
 
-        /* ---- Tabs ---- */
-        .stTabs [data-baseweb="tab-list"] {{
-            background-color: transparent;
-        }}
-
+        /* ---- Tabs text color adjustment ---- */
         .stTabs [data-baseweb="tab"] {{
             color: {text_secondary};
         }}
-
         .stTabs [aria-selected="true"] {{
             color: {accent} !important;
         }}
 
-        /* ---- Inputs ---- */
-        .stTextInput input, .stTextArea textarea, .stSelectbox [data-baseweb="select"] {{
-            background-color: {input_bg} !important;
-            color: {text_primary} !important;
-        }}
-
-        /* ---- Expander ---- */
-        .streamlit-expanderHeader {{
-            background-color: {bg_secondary} !important;
-            color: {text_primary} !important;
-        }}
-
-        /* ---- Data frame ---- */
-        [data-testid="stDataFrame"] {{
-            background-color: {bg} !important;
-        }}
-
-        /* ---- Custom classes ---- */
+        /* ---- Custom classes for FIRE layout ---- */
         .fire-header {{
             color: {text_primary};
             font-size: 1.8rem;
@@ -188,14 +136,26 @@ def _apply_theme():
             font-weight: 500;
             letter-spacing: 0.01em;
             transition: all 0.2s ease;
+            background-color: {card_bg} !important;
+            color: {text_primary} !important;
+            border: 1px solid {border} !important;
+        }}
+
+        .stButton > button[kind="primary"] {{
+            background-color: {accent} !important;
+            color: white !important;
+            border: none !important;
         }}
 
         .stButton > button:hover {{
             transform: translateY(-1px);
+            border-color: {accent} !important;
+            color: {accent} !important;
         }}
 
-        .stProgress > div > div > div > div {{
-            background: linear-gradient(90deg, {accent}, {accent_hover});
+        .stButton > button[kind="primary"]:hover {{
+            background-color: {accent_hover} !important;
+            color: white !important;
         }}
 
         .info-banner {{
@@ -221,8 +181,8 @@ def _apply_theme():
     """, unsafe_allow_html=True)
 
 
-# Apply theme on every run
-_apply_theme()
+# Apply custom CSS using native theme variables on every run
+_inject_css()
 
 
 def init_session_state():
@@ -248,8 +208,8 @@ def main():
         show_sidebar()
         role = st.session_state["role"]
         if role == "admin":
-            from views.admin import render_admin
-            render_admin()
+            from views.admin import render_admin_portal
+            render_admin_portal()
         elif role == "manager":
             from views.manager import render_manager
             render_manager()
@@ -265,8 +225,7 @@ def show_sidebar():
         st.caption("Freedom Intelligent Routing Engine")
         st.markdown('<div class="fire-divider"></div>', unsafe_allow_html=True)
 
-        role_emoji = {"admin": "👑", "manager": "💼", "customer": "🙋"}
-        st.markdown(f"**{role_emoji.get(st.session_state['role'], '❓')} {st.session_state['username']}**")
+        st.markdown(f"**{st.session_state['username']}**")
         st.caption(f"Role: {st.session_state['role'].title()}")
 
         st.markdown('<div class="fire-divider"></div>', unsafe_allow_html=True)
@@ -274,23 +233,6 @@ def show_sidebar():
         if st.button("Logout", use_container_width=True):
             for key in list(st.session_state.keys()):
                 del st.session_state[key]
-            st.rerun()
-
-        st.markdown('<div class="fire-divider"></div>', unsafe_allow_html=True)
-
-        # Theme selector (at bottom of sidebar)
-        current_theme = _get_theme()
-        theme_options = ["light", "dark"]
-        theme_idx = theme_options.index(current_theme)
-        new_theme = st.selectbox(
-            "Theme",
-            theme_options,
-            index=theme_idx,
-            format_func=lambda t: "☀️ Light" if t == "light" else "🌙 Dark",
-            key="theme_selector",
-        )
-        if new_theme != current_theme:
-            st.session_state["theme"] = new_theme
             st.rerun()
 
 
