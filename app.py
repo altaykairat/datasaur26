@@ -271,16 +271,26 @@ def show_sidebar():
 
         st.markdown('<div class="fire-divider"></div>', unsafe_allow_html=True)
 
-        # Theme toggle
-        current_theme = _get_theme()
-        theme_label = "☀️ Light Mode" if current_theme == "dark" else "🌙 Dark Mode"
-        if st.button(theme_label, use_container_width=True):
-            st.session_state["theme"] = "light" if current_theme == "dark" else "dark"
-            st.rerun()
-
         if st.button("Logout", use_container_width=True):
             for key in list(st.session_state.keys()):
                 del st.session_state[key]
+            st.rerun()
+
+        st.markdown('<div class="fire-divider"></div>', unsafe_allow_html=True)
+
+        # Theme selector (at bottom of sidebar)
+        current_theme = _get_theme()
+        theme_options = ["light", "dark"]
+        theme_idx = theme_options.index(current_theme)
+        new_theme = st.selectbox(
+            "Theme",
+            theme_options,
+            index=theme_idx,
+            format_func=lambda t: "☀️ Light" if t == "light" else "🌙 Dark",
+            key="theme_selector",
+        )
+        if new_theme != current_theme:
+            st.session_state["theme"] = new_theme
             st.rerun()
 
 

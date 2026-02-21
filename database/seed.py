@@ -75,7 +75,7 @@ def seed_managers(db):
                 role=role,
                 skills=skills,
                 office_location=office,
-                current_load=current_load,
+                current_load=0,  # Always start fresh; load accumulates from routing
                 is_active=True,
             )
             db.add(manager)
