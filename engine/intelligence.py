@@ -108,11 +108,11 @@ class IntelligenceEngine:
         Returns dict with: type, priority, language, sentiment, normalized_address,
         summary, and optional flags (ai_fallback, ai_schema_error, needs_clarification, etc).
         """
-        if not description or not description.strip():
+        if not description or len(description.strip()) < 3:
             result = self._fallback_analysis()
             result["needs_clarification"] = True
-            result["priority"] = 3  # Lower priority for empty text
-            result["summary"] = "Пустое обращение; требуется уточнение у клиента."
+            result["priority"] = 3  # Lower priority for empty/garbage text
+            result["summary"] = "Пустое или неясное обращение; требуется уточнение у клиента."
             return result
 
         last_error = None
@@ -126,7 +126,7 @@ class IntelligenceEngine:
                     ],
                     temperature=0.1,
                     max_tokens=800,
-                    timeout=30,
+                    timeout=8.0,  # Enforce strict 8s timeout to meet SLA
                 )
 
                 raw = response.choices[0].message.content.strip()

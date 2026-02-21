@@ -1,7 +1,7 @@
 """Ticket Router — full pipeline: AI enrichment → geo-routing → skill filter → RR load balance."""
 import hashlib
 import uuid
-import logging
+from utils.logging import get_safe_logger
 from typing import Optional
 
 import pandas as pd
@@ -13,7 +13,7 @@ from database.models import (
 from engine.intelligence import IntelligenceEngine
 from utils.geo import find_nearest_branch, resolve_city, OFFICE_CITIES
 
-logger = logging.getLogger("fire.router")
+logger = get_safe_logger(__name__)
 
 # Required columns for CSV batch uploads
 REQUIRED_CSV_COLUMNS = {"GUID клиента", "Сегмент клиента", "Населённый пункт", "Область"}
@@ -408,12 +408,12 @@ class TicketRouter:
         top_two = sorted_candidates[:2]
         candidate_key = f"{min(top_two[0].id, top_two[1].id)}_{max(top_two[0].id, top_two[1].id)}"
 
-        # Look up or create RR state
+        # Look up or create RR state with row-level locking to prevent concurrency races
         rr_office_id = branch_id if branch_id is not None else 0
         rr = db.query(RoundRobinState).filter(
             RoundRobinState.office_id == rr_office_id,
             RoundRobinState.candidate_key == candidate_key,
-        ).first()
+        ).with_for_update().first()
 
         if rr is None:
             rr = RoundRobinState(

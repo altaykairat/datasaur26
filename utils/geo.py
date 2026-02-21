@@ -1,6 +1,6 @@
 """Geo utilities: Haversine distance calculation, city matching, and Nominatim fallback."""
 import math
-import logging
+from utils.logging import get_safe_logger
 from difflib import get_close_matches
 
 try:
@@ -10,7 +10,7 @@ try:
 except ImportError:
     _GEOPY_AVAILABLE = False
 
-logger = logging.getLogger("fire.geo")
+logger = get_safe_logger(__name__)
 
 # Kazakhstan bounding box (generous)
 _KZ_LAT_MIN, _KZ_LAT_MAX = 40.0, 56.0
