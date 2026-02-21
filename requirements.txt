@@ -1,3 +1,4 @@
+<<<<<<< Updated upstream
 altair==6.0.0
 annotated-types==0.7.0
 anyio==4.12.1
@@ -53,4 +54,6 @@ typing_extensions==4.15.0
 tzdata==2025.3
 urllib3==2.6.3
 watchdog==6.0.0
-geopy==2.4.1
+geopy>=2.4.0
+pytesseract>=0.3.10
+Pillow>=10.0.0

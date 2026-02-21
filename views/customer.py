@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 from database.connection import get_db
 from database.models import Ticket, Manager, TicketStatus
+from utils.ocr import extract_text_from_uploaded_file, combine_description_with_ocr, is_ocr_available
 
 
 def render_customer():
@@ -30,17 +31,41 @@ def _render_create_ticket():
             height=180,
             placeholder="Please describe your issue in detail. Include any relevant account numbers, dates, or error messages..."
         )
+
+        screenshot = st.file_uploader(
+            "Attach a screenshot (optional)",
+            type=["png", "jpg", "jpeg", "bmp", "webp"],
+            help="If your issue involves an error screen, attach a screenshot. We'll extract text from it automatically."
+        )
+
         submitted = st.form_submit_button("Submit Ticket", use_container_width=True, type="primary")
 
         if submitted:
-            if not description.strip():
-                st.error("Please describe your issue before submitting.")
+            final_description = description.strip()
+            flags = {}
+
+            # Run OCR on uploaded screenshot
+            if screenshot is not None and is_ocr_available():
+                ocr_result = extract_text_from_uploaded_file(screenshot)
+                if ocr_result["success"]:
+                    final_description = combine_description_with_ocr(final_description, ocr_result["text"])
+                    flags["ocr_extracted"] = True
+                    flags["ocr_chars"] = len(ocr_result["text"])
+                    st.info(f"📸 Extracted {len(ocr_result['text'])} characters from screenshot")
+                else:
+                    flags["ocr_failed"] = ocr_result.get("error", "unknown")
+                    if not final_description:
+                        st.warning("Could not read text from screenshot. Please describe your issue in the text box.")
+
+            if not final_description:
+                st.error("Please describe your issue or attach a readable screenshot.")
             else:
                 with get_db() as db:
                     ticket = Ticket(
                         customer_id=st.session_state["user_id"],
-                        description=description.strip(),
+                        description=final_description,
                         status=TicketStatus.NEW.value,
+                        flags=flags if flags else None,
                         created_at=datetime.now(timezone.utc),
                     )
                     db.add(ticket)

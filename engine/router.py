@@ -11,7 +11,8 @@ from database.models import (
     Manager, Ticket, Office, TicketStatus, RoundRobinState,
 )
 from engine.intelligence import IntelligenceEngine
-from utils.geo import find_nearest_branch, resolve_city, OFFICE_CITIES
+from utils.geo import find_nearest_branch, find_nearest_office, resolve_city, OFFICE_CITIES
+from utils.ocr import extract_text_from_image, is_ocr_available, combine_description_with_ocr
 
 logger = get_safe_logger(__name__)
 
@@ -19,6 +20,8 @@ logger = get_safe_logger(__name__)
 REQUIRED_CSV_COLUMNS = {"GUID клиента", "Сегмент клиента", "Населённый пункт", "Область"}
 # Description column may have trailing space — we check both variants
 DESCRIPTION_VARIANTS = {"Описание ", "Описание"}
+# Image/attachment columns that may contain screenshots
+IMAGE_COLUMN_VARIANTS = {"Скриншот", "Вложение", "Вложения", "Screenshot", "Attachment", "Image"}
 
 class TicketRouter:
     """Routes tickets to the best manager using the full FIRE pipeline."""
@@ -602,6 +605,26 @@ class TicketRouter:
                     guid = str(row.get("GUID клиента", ""))
 
                     flags = {}
+
+                    # ---- OCR: always extract text from screenshots if available ----
+                    if is_ocr_available():
+                        for img_col in IMAGE_COLUMN_VARIANTS:
+                            img_source = row.get(img_col, "")
+                            if img_source and str(img_source).strip():
+                                ocr_result = extract_text_from_image(str(img_source))
+                                if ocr_result["success"]:
+                                    description = combine_description_with_ocr(description, ocr_result["text"])
+                                    flags["ocr_extracted"] = True
+                                    flags["ocr_source"] = ocr_result["source_type"]
+                                    flags["ocr_chars"] = len(ocr_result["text"])
+                                    logger.info(f"Row {idx}: OCR extracted {len(ocr_result['text'])} chars from {img_col}")
+                                    break
+                                else:
+                                    flags["ocr_failed"] = ocr_result.get("error", "unknown")
+
+                    # Flag if description is still empty after OCR attempt
+                    if not description.strip():
+                        flags["empty_description"] = True
 
                     # ---- Idempotency Check ----
                     if guid:
