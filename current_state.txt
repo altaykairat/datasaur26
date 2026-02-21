@@ -1,0 +1,90 @@
+# F.I.R.E. Current Pipeline State (As Implemented)
+
+This document explains exactly how the F.I.R.E. routing pipeline processes a ticket from ingestion to assignment.
+
+## 1. Ticket Submission & Ingestion
+
+*   Tickets enter via the Streamlit UI: one-by-one (Customer panel) or bulk CSV upload (Admin panel).
+*   Bulk CSV requires columns: `GUID клиента`, `Описание`, `Сегмент клиента`, `Населённый пункт`, `Область`.
+*   **Schema validation**: the system checks all required columns exist before processing. Missing columns → clear error message, batch rejected.
+*   **Per-row error handling**: corrupted/bad rows are skipped with status `DeadLetter`, remaining rows continue processing.
+*   **Idempotency**: duplicate `GUID клиента` → skipped, flagged `duplicate_ticket_id=true`.
+*   Each ticket gets a unique `correlation_id` (UUID-based) for traceability.
+
+## 2. AI Enrichment
+
+*   The ticket description is sent to the `IntelligenceEngine` (DeepSeek API or local Phi-4 via Ollama).
+*   **Bounded retries**: up to 2 retries with backoff before falling back to defaults.
+*   **30-second timeout** on LLM API calls.
+*   The AI extracts 6 structured fields:
+    1.  **Type** — one of 7 enums (Жалоба, Смена данных, Консультация, Претензия, Неработоспособность приложения, Мошеннические действия, Спам)
+    2.  **Priority** — 1–10, clamped to range
+    3.  **Language** — RU, KZ, or ENG (default RU if unknown, flagged `language_confidence=low`)
+    4.  **Sentiment** — Позитивный, Нейтральный, Негативный
+    5.  **Normalized Address** — extracted city/street or "Unknown"
+    6.  **Summary** — 1–2 sentence summary + recommended next actions for manager
+*   **Fallback on failure**: if LLM fails after all retries → safe defaults (type=Консультация, priority=5, language=RU, sentiment=Нейтральный) + flag `ai_fallback=true`.
+*   **Validation flags**:
+    -   `ai_schema_error` — LLM returned invalid JSON
+    -   `ai_type_low_confidence` — unknown type, defaulted to Консультация
+    -   `needs_clarification` — empty ticket text, priority lowered to 3
+
+## 3. Geo-Routing (Office Selection)
+
+The system determines the target office through cascading rules:
+
+*   **A. City Resolution**: tries exact match → fuzzy match (70% similarity) → region-based fallback → AI-extracted address.
+*   **B. Direct Match**: if resolved city is one of 16 office locations → selected immediately (`rule="exact_match"`).
+*   **C. Nearest Office**: if city is known but not an office → Haversine distance to all offices, pick nearest (`rule="nearest_office_dist_X"`). Offices with missing coordinates are skipped.
+*   **D. Tie-Breaker**: equal distances → alphabetical office name wins.
+*   **E. Deterministic 50/50 Fallback**: if address unknown, geocode failed, or distance >500km → `hash(ticket_id) % 2` routes to Астана or Алматы consistently. Flags set:
+    -   `address_unknown=true` — unresolvable address
+    -   `foreign_country=true` — distance >500km
+    -   `geocode_failed=true` — coordinate lookup failed
+
+## 4. Skills Filter (Graduated Cascade)
+
+Managers are filtered by hard rules with a 5-level fallback:
+
+1.  **Strict**: all rules applied in target office
+    -   VIP segment → manager must have "VIP" skill
+    -   Type = "Смена данных" → manager must be "Главный специалист"
+    -   Language KZ/ENG → manager must have that language skill
+    -   Inactive managers (`is_active=false`) excluded at every level
+2.  **Relax language**: drop KZ/ENG requirement, keep VIP + role constraints
+3.  **Expand offices**: search Астана + Алматы, keep VIP + role
+4.  **VIP escalation**: if VIP and still no candidates → return empty (unassigned). **VIP is NEVER relaxed.**
+5.  **Global fallback**: lowest-load "Главный специалист" managers, then any active manager
+
+Flag `no_candidate_after_hardskills=true` set whenever any fallback level triggers.
+
+## 5. Load Balancing & Round Robin
+
+*   Candidate loads are validated: negative/null → coerced to 9999, flagged `invalid_load=true`.
+*   Candidates sorted by `(current_load, manager_id)` for determinism.
+*   **Top 2** managers with lowest load are selected.
+*   **Round Robin**: a persisted pointer in the `rr_state` DB table alternates assignment between the top 2. Pointer incremented atomically per assignment.
+*   If only 1 candidate → assigned directly.
+*   Manager's `current_load` incremented by 1 on assignment.
+*   `workload_at_assignment` recorded for audit.
+
+## 6. Database Storage & Output
+
+*   Ticket saved to PostgreSQL with:
+    -   Full AI analysis JSON (type, priority, language, sentiment, address, summary)
+    -   `office_rule` — how the office was selected
+    -   `routing_trace` — full audit trail: geo decision, skill filter rules/fallback, candidate list, loads, RR pointer
+    -   `flags` — all boolean flags in one JSON dict
+    -   `workload_at_assignment`, `correlation_id`
+*   Status set to `Assigned` (with manager) or `RoutingFailed` (no eligible manager).
+*   Results displayed in Admin dashboard with summary, office rule, and flags.
+*   Manager view shows "Why Assigned" routing explanation, AI summary, and active flags per ticket.
+
+## Ticket States
+
+```
+New → Ingested → Queued → Enriching → Enriched → Routing → Assigned → Closed
+                                                         ↘ RoutingFailed
+                                  ↘ EnrichFailed
+                                                                    ↘ DeadLetter (row-level error)
+```
