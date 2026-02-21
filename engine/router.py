@@ -379,6 +379,19 @@ class TicketRouter:
         try:
             offices = self._load_offices(db)
 
+            # Spam check: skip routing entirely
+            if ai_analysis["type"] == "Спам":
+                result = {
+                    "ai_analysis": ai_analysis,
+                    "assigned_manager_id": None,
+                    "assigned_manager_name": "Spam — not assigned",
+                    "office_city": "N/A",
+                    "office_rule": "spam_skip",
+                }
+                if db_ctx:
+                    db.commit()
+                return result
+
             # 1. Geo-routing
             geo_res = self._geo_route(ai_analysis, client_city, client_region, offices, ticket_id)
             office_city = geo_res["city"]
@@ -525,6 +538,51 @@ class TicketRouter:
                                "needs_clarification", "language_confidence"):
                         if fk in ai_analysis:
                             flags[fk] = ai_analysis.pop(fk)
+
+                    # ---- Spam check: skip routing entirely ----
+                    is_spam = ai_analysis["type"] == "Спам"
+
+                    if is_spam:
+                        flags["spam_detected"] = True
+                        result = {
+                            "ticket_index": idx,
+                            "ai_type": ai_analysis["type"],
+                            "ai_priority": ai_analysis["priority"],
+                            "ai_language": ai_analysis["language"],
+                            "ai_sentiment": ai_analysis["sentiment"],
+                            "ai_address": ai_analysis.get("normalized_address", "Unknown"),
+                            "ai_summary": ai_analysis.get("summary", ""),
+                            "routed_office": "N/A",
+                            "office_rule": "spam_skip",
+                            "assigned_manager": "Spam — not assigned",
+                            "assigned_manager_id": None,
+                            "segment": segment,
+                            "status": TicketStatus.SPAM.value,
+                            "flags": flags,
+                            "correlation_id": correlation_id,
+                        }
+                        results.append(result)
+
+                        # Save spam ticket to DB for analytics
+                        ticket = Ticket(
+                            client_guid=guid if guid else None,
+                            correlation_id=correlation_id,
+                            description=description[:5000],
+                            status=TicketStatus.SPAM.value,
+                            assigned_manager_id=None,
+                            ai_analysis_json=ai_analysis,
+                            segment=segment,
+                            client_city=city,
+                            client_address=f"{row.get('Улица', '')}, {row.get('Дом', '')}".strip(", "),
+                            office_rule="spam_skip",
+                            routing_trace={"spam": True},
+                            flags=flags,
+                        )
+                        db.add(ticket)
+
+                        if progress_callback:
+                            progress_callback(idx + 1, total, result)
+                        continue
 
                     # ---- Geo-routing ----
                     geo_res = self._geo_route(ai_analysis, city, region, offices, guid)

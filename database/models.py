@@ -28,6 +28,7 @@ class TicketStatus(str, enum.Enum):
     ENRICH_FAILED = "EnrichFailed"
     ROUTING_FAILED = "RoutingFailed"
     DEAD_LETTER = "DeadLetter"
+    SPAM = "Spam"
 
 
 class User(Base):

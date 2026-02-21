@@ -21,112 +21,208 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ----- Custom CSS — Clean Professional Theme -----
-st.markdown("""
-<style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
 
-    /* ---- Global ---- */
-    .stApp {
-        font-family: 'Inter', sans-serif;
-    }
+def _get_theme():
+    """Get current theme from session state."""
+    if "theme" not in st.session_state:
+        st.session_state["theme"] = "light"
+    return st.session_state["theme"]
 
-    /* ---- Header ---- */
-    .fire-header {
-        color: #E8E8E8;
-        font-size: 1.8rem;
-        font-weight: 700;
-        letter-spacing: -0.02em;
-        margin-bottom: 0.2rem;
-    }
 
-    .fire-header span.accent {
-        color: #F59E0B;
-    }
+def _apply_theme():
+    """Apply CSS based on current theme setting."""
+    theme = _get_theme()
 
-    .fire-subtitle {
-        color: #9CA3AF;
-        font-size: 0.9rem;
-        font-weight: 400;
-        margin-bottom: 1.5rem;
-    }
+    if theme == "dark":
+        bg = "#0F1117"
+        bg_secondary = "#1E1E2E"
+        border = "#2D2D3F"
+        text_primary = "#F3F4F6"
+        text_secondary = "#9CA3AF"
+        sidebar_bg = "#111827"
+        sidebar_border = "#1F2937"
+        card_bg = "#1E1E2E"
+        input_bg = "#1E1E2E"
+        banner_bg = "#1E293B"
+    else:
+        bg = "#FFFFFF"
+        bg_secondary = "#F8F9FA"
+        border = "#E5E7EB"
+        text_primary = "#111827"
+        text_secondary = "#6B7280"
+        sidebar_bg = "#F9FAFB"
+        sidebar_border = "#E5E7EB"
+        card_bg = "#FFFFFF"
+        input_bg = "#F9FAFB"
+        banner_bg = "#F0F4FF"
 
-    /* ---- Metric Cards ---- */
-    .metric-card {
-        background: #1E1E2E;
-        border: 1px solid #2D2D3F;
-        border-radius: 10px;
-        padding: 1.2rem 1.4rem;
-        margin: 0.4rem 0;
-        transition: border-color 0.2s ease;
-    }
+    accent = "#F59E0B"
+    accent_hover = "#D97706"
 
-    .metric-card:hover {
-        border-color: #F59E0B;
-    }
+    st.markdown(f"""
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
 
-    .metric-card h3 {
-        color: #9CA3AF;
-        margin: 0 0 0.4rem 0;
-        font-size: 0.75rem;
-        font-weight: 500;
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-    }
+        /* ---- Force Streamlit core backgrounds ---- */
+        .stApp,
+        [data-testid="stAppViewContainer"],
+        [data-testid="stMain"],
+        .main .block-container {{
+            background-color: {bg} !important;
+            color: {text_primary} !important;
+            font-family: 'Inter', sans-serif;
+        }}
 
-    .metric-card .value {
-        color: #F3F4F6;
-        font-size: 1.8rem;
-        font-weight: 700;
-    }
+        [data-testid="stHeader"] {{
+            background-color: {bg} !important;
+        }}
 
-    .metric-card .value.sm {
-        font-size: 1.1rem;
-    }
+        [data-testid="stBottom"] {{
+            background-color: {bg} !important;
+        }}
 
-    /* ---- Sidebar ---- */
-    [data-testid="stSidebar"] {
-        background: #111827;
-        border-right: 1px solid #1F2937;
-    }
+        /* ---- Sidebar ---- */
+        [data-testid="stSidebar"],
+        [data-testid="stSidebar"] > div:first-child {{
+            background: {sidebar_bg} !important;
+            border-right: 1px solid {sidebar_border};
+        }}
 
-    /* ---- Divider ---- */
-    .fire-divider {
-        height: 1px;
-        background: #2D2D3F;
-        margin: 1.2rem 0;
-        border: none;
-    }
+        /* ---- All text elements ---- */
+        .stApp h1, .stApp h2, .stApp h3, .stApp h4, .stApp h5, .stApp h6,
+        .stApp p, .stApp span, .stApp label, .stApp div {{
+            color: {text_primary};
+        }}
 
-    /* ---- Buttons ---- */
-    .stButton > button {
-        border-radius: 8px;
-        font-weight: 500;
-        letter-spacing: 0.01em;
-        transition: all 0.2s ease;
-    }
+        .stApp .stCaption, [data-testid="stCaptionContainer"] {{
+            color: {text_secondary} !important;
+        }}
 
-    .stButton > button:hover {
-        transform: translateY(-1px);
-    }
+        /* ---- Tabs ---- */
+        .stTabs [data-baseweb="tab-list"] {{
+            background-color: transparent;
+        }}
 
-    /* ---- Progress bar ---- */
-    .stProgress > div > div > div > div {
-        background: linear-gradient(90deg, #F59E0B, #D97706);
-    }
+        .stTabs [data-baseweb="tab"] {{
+            color: {text_secondary};
+        }}
 
-    /* ---- Info / warnings ---- */
-    .info-banner {
-        background: #1E293B;
-        border-left: 3px solid #F59E0B;
-        border-radius: 0 8px 8px 0;
-        padding: 0.8rem 1.2rem;
-        margin: 0.5rem 0;
-        color: #D1D5DB;
-        font-size: 0.88rem;
-    }
-</style>
-""", unsafe_allow_html=True)
+        .stTabs [aria-selected="true"] {{
+            color: {accent} !important;
+        }}
+
+        /* ---- Inputs ---- */
+        .stTextInput input, .stTextArea textarea, .stSelectbox [data-baseweb="select"] {{
+            background-color: {input_bg} !important;
+            color: {text_primary} !important;
+        }}
+
+        /* ---- Expander ---- */
+        .streamlit-expanderHeader {{
+            background-color: {bg_secondary} !important;
+            color: {text_primary} !important;
+        }}
+
+        /* ---- Data frame ---- */
+        [data-testid="stDataFrame"] {{
+            background-color: {bg} !important;
+        }}
+
+        /* ---- Custom classes ---- */
+        .fire-header {{
+            color: {text_primary};
+            font-size: 1.8rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            margin-bottom: 0.2rem;
+        }}
+
+        .fire-subtitle {{
+            color: {text_secondary};
+            font-size: 0.9rem;
+            font-weight: 400;
+            margin-bottom: 1.5rem;
+        }}
+
+        .metric-card {{
+            background: {card_bg};
+            border: 1px solid {border};
+            border-radius: 10px;
+            padding: 1.2rem 1.4rem;
+            margin: 0.4rem 0;
+            transition: border-color 0.2s ease;
+        }}
+
+        .metric-card:hover {{
+            border-color: {accent};
+        }}
+
+        .metric-card h3 {{
+            color: {text_secondary} !important;
+            margin: 0 0 0.4rem 0;
+            font-size: 0.75rem;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+        }}
+
+        .metric-card .value {{
+            color: {text_primary} !important;
+            font-size: 1.8rem;
+            font-weight: 700;
+        }}
+
+        .metric-card .value.sm {{
+            font-size: 1.1rem;
+        }}
+
+        .fire-divider {{
+            height: 1px;
+            background: {border};
+            margin: 1.2rem 0;
+            border: none;
+        }}
+
+        .stButton > button {{
+            border-radius: 8px;
+            font-weight: 500;
+            letter-spacing: 0.01em;
+            transition: all 0.2s ease;
+        }}
+
+        .stButton > button:hover {{
+            transform: translateY(-1px);
+        }}
+
+        .stProgress > div > div > div > div {{
+            background: linear-gradient(90deg, {accent}, {accent_hover});
+        }}
+
+        .info-banner {{
+            background: {banner_bg};
+            border-left: 3px solid {accent};
+            border-radius: 0 8px 8px 0;
+            padding: 0.8rem 1.2rem;
+            margin: 0.5rem 0;
+            color: {text_secondary};
+            font-size: 0.88rem;
+        }}
+
+        .spam-badge {{
+            display: inline-block;
+            background: #EF4444;
+            color: white;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }}
+    </style>
+    """, unsafe_allow_html=True)
+
+
+# Apply theme on every run
+_apply_theme()
 
 
 def init_session_state():
@@ -163,7 +259,7 @@ def main():
 
 
 def show_sidebar():
-    """Render the sidebar with user info and logout."""
+    """Render the sidebar with user info, theme toggle, and logout."""
     with st.sidebar:
         st.markdown('#### 🔥 F.I.R.E.', unsafe_allow_html=True)
         st.caption("Freedom Intelligent Routing Engine")
@@ -174,6 +270,13 @@ def show_sidebar():
         st.caption(f"Role: {st.session_state['role'].title()}")
 
         st.markdown('<div class="fire-divider"></div>', unsafe_allow_html=True)
+
+        # Theme toggle
+        current_theme = _get_theme()
+        theme_label = "☀️ Light Mode" if current_theme == "dark" else "🌙 Dark Mode"
+        if st.button(theme_label, use_container_width=True):
+            st.session_state["theme"] = "light" if current_theme == "dark" else "dark"
+            st.rerun()
 
         if st.button("Logout", use_container_width=True):
             for key in list(st.session_state.keys()):

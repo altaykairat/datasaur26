@@ -139,6 +139,13 @@ def _render_ticket_card(ticket: Ticket, db, manager_id: int):
             priority_label = "Low"
 
     with st.expander(f"Ticket #{ticket.id} · {ai_type} · Priority: {priority} ({priority_label})", expanded=False):
+        # AI Summary (if available)
+        summary = ""
+        if ticket.ai_analysis_json and isinstance(ticket.ai_analysis_json, dict):
+            summary = ticket.ai_analysis_json.get("summary", "")
+        if summary:
+            st.markdown(f"**Summary:** {summary}")
+
         col1, col2, col3 = st.columns(3)
         with col1:
             st.caption("Segment")

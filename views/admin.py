@@ -91,6 +91,7 @@ def _run_batch_routing(df: pd.DataFrame, ai_mode: str):
         "processed": 0,
         "assigned": 0,
         "unassigned": 0,
+        "spam": 0,
         "by_city": {},
         "by_type": {},
         "by_sentiment": {},
@@ -98,7 +99,9 @@ def _run_batch_routing(df: pd.DataFrame, ai_mode: str):
 
     def progress_callback(current, total, result):
         live_stats["processed"] = current
-        if result["assigned_manager"] != "Unassigned":
+        if result.get("status") == "Spam":
+            live_stats["spam"] += 1
+        elif result["assigned_manager"] not in ("Unassigned", "Spam"):
             live_stats["assigned"] += 1
         else:
             live_stats["unassigned"] += 1
@@ -117,6 +120,7 @@ def _run_batch_routing(df: pd.DataFrame, ai_mode: str):
         status_text.caption(
             f"Ticket {current}/{total} · "
             f"Assigned: {live_stats['assigned']} · "
+            f"Spam: {live_stats['spam']} · "
             f"Unassigned: {live_stats['unassigned']} · "
             f"{city} → {result['assigned_manager']}"
         )
@@ -130,7 +134,7 @@ def _run_batch_routing(df: pd.DataFrame, ai_mode: str):
         progress_bar.progress(1.0)
         status_text.markdown(
             f"**Done.** {total} tickets in {elapsed:.1f}s ({elapsed/total:.1f}s per ticket) · "
-            f"Assigned: {live_stats['assigned']} · Unassigned: {live_stats['unassigned']}"
+            f"Assigned: {live_stats['assigned']} · Spam: {live_stats['spam']} · Unassigned: {live_stats['unassigned']}"
         )
 
         st.session_state["last_routing_results"] = results_df
@@ -208,9 +212,10 @@ def _render_statistics():
         failed_tickets = db.query(Ticket).filter(
             Ticket.status.in_(["EnrichFailed", "RoutingFailed", "DeadLetter"])
         ).count()
+        spam_tickets = db.query(Ticket).filter(Ticket.status == "Spam").count()
 
         # Metric cards
-        col1, col2, col3, col4, col5 = st.columns(5)
+        col1, col2, col3, col4, col5, col6 = st.columns(6)
         with col1:
             st.markdown(f"""<div class="metric-card">
                 <h3>Total Tickets</h3>
@@ -233,8 +238,13 @@ def _render_statistics():
             </div>""", unsafe_allow_html=True)
         with col5:
             st.markdown(f"""<div class="metric-card">
-                <h3>Failed / Dead Letter</h3>
+                <h3>Failed</h3>
                 <div class="value">{failed_tickets}</div>
+            </div>""", unsafe_allow_html=True)
+        with col6:
+            st.markdown(f"""<div class="metric-card">
+                <h3>Spam</h3>
+                <div class="value">{spam_tickets}</div>
             </div>""", unsafe_allow_html=True)
 
         st.markdown('<div class="fire-divider"></div>', unsafe_allow_html=True)
