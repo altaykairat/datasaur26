@@ -140,7 +140,7 @@ def geocode_nominatim(city_name: str) -> dict | None:
     return None
 
 
-def resolve_city(city_name: str, region: str = None) -> dict | None:
+def resolve_city(city_name: str, region: str = None, use_nominatim: bool = True) -> dict | None:
     """
     Try to resolve a city name into a known city with coordinates.
 
@@ -149,7 +149,7 @@ def resolve_city(city_name: str, region: str = None) -> dict | None:
     2. Exact match in CITY_COORDINATES
     3. Fuzzy match against office cities
     4. Region-based lookup
-    5. Nominatim geocoding (if geopy available)
+    5. Nominatim geocoding (if use_nominatim=True and geopy available)
 
     Returns a dict with 'city' and 'rule' keys, or None if no match.
     For Nominatim results: also includes 'lat', 'lon', 'is_foreign'.
@@ -181,7 +181,7 @@ def resolve_city(city_name: str, region: str = None) -> dict | None:
             return {"city": REGION_TO_CITY[region], "rule": "region_fallback"}
 
     # Nominatim fallback — resolve unknown cities via OpenStreetMap
-    if city_name:
+    if use_nominatim and city_name:
         geo_result = geocode_nominatim(city_name)
         if geo_result:
             lat, lon = geo_result["lat"], geo_result["lon"]
@@ -212,48 +212,81 @@ def resolve_city(city_name: str, region: str = None) -> dict | None:
     return None
 
 
-def find_nearest_office(city_name: str, offices: list[dict]) -> tuple[str, float]:
+def find_nearest_branch(client_city: str, client_address: str, branches: list[dict], use_nominatim: bool = True, enforce_street_level: bool = False) -> tuple[dict | None, list[dict]]:
     """
-    Find the nearest office to a given city.
+    Find the nearest branch (and return ranked alternative branches) using street level or city level.
 
     Args:
-        city_name: The customer's city
-        offices: List of office dicts with 'city', 'lat', 'lon'
-
+        client_city: The customer's resolved city name.
+        client_address: The full address (from AI extraction) or None.
+        branches: List of office dicts with 'id', 'city', 'address', 'lat', 'lon'.
+    
     Returns:
-        Tuple of (office_city, distance_km). If city unknown, returns (None, -1).
+        (nearest_branch_dict, [list of alternative branch dicts with distance])
+        Returns (None, []) if distance cannot be calculated.
     """
-    coords = CITY_COORDINATES.get(city_name)
-    if not coords:
-        # Try Nominatim as a last resort
-        geo_result = geocode_nominatim(city_name)
+    # 1. Try to get precise coordinates from Nominatim (street-level)
+    coords = None
+    search_query = None
+    
+    if use_nominatim and client_address and client_address != "Unknown":
+        # Try full address first
+        search_query = client_address
+        geo_result = geocode_nominatim(search_query)
+        
+        # If full address fails, try stripping apartment/building numbers (anything after last comma)
+        if not geo_result and "," in search_query:
+            parts = [p.strip() for p in search_query.split(",")]
+            if len(parts) > 1:
+                # Try just City, Street
+                search_query_reduced = f"{parts[0]}, {parts[1]}"
+                geo_result = geocode_nominatim(search_query_reduced)
+                
         if geo_result and is_in_kazakhstan(geo_result["lat"], geo_result["lon"]):
-            coords = (geo_result["lat"], geo_result["lon"])
-            CITY_COORDINATES[city_name] = coords  # Cache for this session
-        else:
-            return None, -1
+             coords = (geo_result["lat"], geo_result["lon"])
+             
+    if not coords:
+        if enforce_street_level:
+            # If we couldn't get a precise street-level coordinate, return None
+            # so that the router can distribute load fairly among all city branches.
+            return None, []
+            
+        # 2. Try city-level coordinates if street-level fails (for cross-city routing)
+        search_query = client_city
+        coords = CITY_COORDINATES.get(search_query)
+        
+        if not coords and use_nominatim:
+            # Try Nominatim as a last resort for the city
+            geo_result = geocode_nominatim(search_query)
+            if geo_result and is_in_kazakhstan(geo_result["lat"], geo_result["lon"]):
+                coords = (geo_result["lat"], geo_result["lon"])
+                CITY_COORDINATES[search_query] = coords  # Cache for this session
+
+    if not coords:
+        return None, []
 
     client_lat, client_lon = coords
 
-    best_office = None
-    best_dist = float("inf")
-
-    for office in offices:
-        # Skip offices with missing coordinates
-        if office.get("lat") is None or office.get("lon") is None:
+    # 3. Calculate distance to all active branches in the target city
+    # Actually, we should calculate distance to ALL branches to see if a cross-city branch is somehow closer
+    branches_with_dist = []
+    for branch in branches:
+        if branch.get("lat") is None or branch.get("lon") is None:
             continue
 
-        dist = haversine(client_lat, client_lon, office["lat"], office["lon"])
-        if dist < best_dist:
-            best_dist = dist
-            best_office = office["city"]
-        elif dist == best_dist and best_office:
-            # Tie breaker: alphabetical office name
-            if office["city"] < best_office:
-                best_office = office["city"]
+        dist = haversine(client_lat, client_lon, branch["lat"], branch["lon"])
+        
+        branch_copy = branch.copy()
+        branch_copy["distance_km"] = round(dist, 1)
+        branches_with_dist.append(branch_copy)
 
-    if best_office is None:
-        # All offices had missing coordinates
-        return None, -1
-
-    return best_office, best_dist
+    if not branches_with_dist:
+        return None, []
+        
+    # 4. Sort by distance, then id
+    sorted_branches = sorted(branches_with_dist, key=lambda x: (x["distance_km"], x.get("id", 0)))
+    
+    nearest_branch = sorted_branches[0]
+    alternatives = sorted_branches[1:]
+    
+    return nearest_branch, alternatives

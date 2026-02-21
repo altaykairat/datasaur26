@@ -11,7 +11,7 @@ from database.models import (
     Manager, Ticket, Office, TicketStatus, RoundRobinState,
 )
 from engine.intelligence import IntelligenceEngine
-from utils.geo import find_nearest_office, resolve_city, OFFICE_CITIES
+from utils.geo import find_nearest_branch, resolve_city, OFFICE_CITIES
 
 logger = logging.getLogger("fire.router")
 
@@ -36,7 +36,7 @@ class TicketRouter:
         if self._offices_cache is None:
             offices = db.query(Office).all()
             self._offices_cache = [
-                {"city": o.city, "lat": o.lat, "lon": o.lon}
+                {"id": o.id, "city": o.city, "name": o.name, "address": o.address, "lat": o.lat, "lon": o.lon}
                 for o in offices
             ]
         return self._offices_cache
@@ -74,7 +74,7 @@ class TicketRouter:
         """
         Determine which office city to route to.
 
-        Returns dict with: city, rule, distance_km, and flags
+        Returns dict with: branch_id, branch_name, city, rule, distance_km, alternative_branches, and flags
         (address_unknown, foreign_country, geocode_failed).
         """
         flags = {
@@ -88,23 +88,42 @@ class TicketRouter:
             num = int(hashlib.md5(tid_str.encode()).hexdigest(), 16)
             city = "Астана" if num % 2 == 0 else "Алматы"
             flags[flag_key] = True
+            
+            # Find any branch in the fallback city
+            fallback_branch = next((o for o in offices if o["city"] == city), None)
+            
             return {
+                "branch_id": fallback_branch["id"] if fallback_branch else None,
+                "branch_name": fallback_branch["name"] if fallback_branch else city,
                 "city": city,
                 "rule": "split_50_50",
                 "distance_km": None,
+                "alternative_branches": [],
                 "flags": flags,
             }
 
-        # Try to resolve the city from client input
-        resolved_dict = resolve_city(client_city, client_region)
+        # 1. Try to resolve the city from client input ON LOCAL DICTIONARIES
+        resolved_dict = resolve_city(client_city, client_region, use_nominatim=False)
 
-        # Also try AI-extracted address
+        # 2. Try the clean AI-extracted address ON LOCAL DICTIONARIES
         if not resolved_dict:
             ai_addr = ai_analysis.get("normalized_address", "Unknown")
-            if ai_addr and ai_addr != "Unknown":
-                parts = ai_addr.split(",")
-                if parts:
-                    resolved_dict = resolve_city(parts[0].strip())
+            ai_city = ai_addr.split(",")[0].strip() if ai_addr != "Unknown" else None
+            if ai_city:
+                resolved_dict = resolve_city(ai_city, use_nominatim=False)
+                if resolved_dict:
+                    resolved_dict["rule"] += "_via_ai"
+
+        # 3. If local match fails, fallback to Nominatim (first AI, then client city)
+        if not resolved_dict:
+            if "ai_city" in locals() and ai_city:
+                resolved_dict = resolve_city(ai_city, use_nominatim=True)
+                if resolved_dict:
+                    resolved_dict["rule"] += "_via_ai"
+
+            if not resolved_dict and client_city:
+                # If everything else failed, try the raw client city against external API
+                resolved_dict = resolve_city(client_city, client_region, use_nominatim=True)
 
         if not resolved_dict:
             return fallback_50_50(ticket_id, "address_unknown")
@@ -116,29 +135,58 @@ class TicketRouter:
         resolved_city_name = resolved_dict["city"]
         resolved_rule = resolved_dict["rule"]
 
-        # If the resolved city IS an office city, use it directly
-        if resolved_city_name in [o["city"] for o in offices]:
-            return {
-                "city": resolved_city_name,
-                "rule": resolved_rule,
-                "distance_km": 0,
-                "flags": flags,
-            }
+        # If the resolved city IS an office city, filter branches for that city
+        city_branches = [o for o in offices if o["city"] == resolved_city_name]
+        
+        client_address = ai_analysis.get("normalized_address", None)
+        
+        if city_branches:
+            # Ticket is in an office city. Find the nearest branch using street-level precision
+            nearest_branch, alternatives = find_nearest_branch(
+                resolved_city_name, client_address, city_branches, enforce_street_level=True
+            )
 
-        # Otherwise, find nearest office
-        nearest_city, distance = find_nearest_office(resolved_city_name, offices)
+            if nearest_branch is None:
+                # Could not compute distance locally. Return all offices in the city for consideration.
+                return {
+                    "branch_id": None,
+                    "branch_name": f"Любой филиал ({resolved_city_name})",
+                    "city": resolved_city_name,
+                    "rule": f"all_city_branches_{resolved_rule}",
+                    "distance_km": None,
+                    "alternative_branches": [
+                        {"branch_id": b["id"], "branch_name": b["name"], "distance_km": None}
+                         for b in city_branches
+                    ],
+                    "flags": flags,
+                }
+        else:
+            # Ticket is far from any office city. Find the absolute nearest branch (cross-city)
+            nearest_branch, alternatives = find_nearest_branch(
+                resolved_city_name, client_address, offices, enforce_street_level=False
+            )
+            
+            if nearest_branch is None:
+                # Total failure to locate even the city, very rare
+                return fallback_50_50(ticket_id, "geocode_failed")
+                
+            if nearest_branch.get("distance_km") and nearest_branch["distance_km"] > 500:
+                # Foreign/very far country
+                return fallback_50_50(ticket_id, "foreign_country")
 
-        if nearest_city is None:
-            # Could not compute distance (unknown coords or all offices missing coords)
-            return fallback_50_50(ticket_id, "geocode_failed")
-
-        if distance > 500:
-            return fallback_50_50(ticket_id, "foreign_country")
+        # Create clean alternatives list for DB
+        alt_list = [
+            {"branch_id": b["id"], "branch_name": b["name"], "distance_km": b.get("distance_km")}
+            for b in alternatives
+        ]
 
         return {
-            "city": nearest_city,
-            "rule": f"nearest_office_dist_{int(distance)}",
-            "distance_km": round(distance, 1),
+            "branch_id": nearest_branch["id"],
+            "branch_name": nearest_branch["name"],
+            "city": nearest_branch["city"],
+            "rule": f"nearest_branch_{resolved_rule}",
+            "distance_km": nearest_branch.get("distance_km"),
+            "alternative_branches": alt_list,
             "flags": flags,
         }
 
@@ -146,10 +194,10 @@ class TicketRouter:
     # Step C: Skill Filter (graduated cascade)
     # ------------------------------------------------------------------
 
-    def _skill_filter(self, db, office_city: str, segment: str,
+    def _skill_filter(self, db, branch_id: Optional[int], office_city: str, segment: str,
                       ticket_type: str, language: str) -> tuple[list["Manager"], dict]:
         """
-        Filter managers by office + required skills with graduated fallback.
+        Filter managers by office branch + required skills with graduated fallback.
 
         Cascade:
         1. Strict: all hard rules in target office
@@ -165,6 +213,7 @@ class TicketRouter:
         needs_lang = language in ("KZ", "ENG")
 
         filter_trace = {
+            "branch_id": branch_id,
             "office_city": office_city,
             "applied_rules": [],
             "fallback_used": None,
@@ -196,38 +245,78 @@ class TicketRouter:
                     if language == "ENG" and "ENG" not in skills:
                         continue
 
-                filtered.append(m)
-            return filtered
-
         def _get_active_managers(query):
             """Get only active managers from a query."""
             managers = query.all()
             return [m for m in managers if getattr(m, 'is_active', True)]
 
-        # ---- Step 1: Strict filter in target office ----
-        office_managers = _get_active_managers(
-            db.query(Manager).filter(Manager.office_location == office_city)
+        # ---- Get pools ----
+        if branch_id is not None:
+            branch_managers = _get_active_managers(
+                db.query(Manager).filter(Manager.office_id == branch_id)
+            )
+        else:
+            branch_managers = []
+
+        city_managers = _get_active_managers(
+            db.query(Manager).join(Office).filter(Office.city == office_city)
         )
-        candidates = _hard_filter(office_managers, check_lang=True)
 
-        if candidates:
-            filter_trace["applied_rules"] = self._build_rules_list(is_vip, is_data_change, needs_lang, language)
-            filter_trace["fallback_used"] = None
-            return candidates, filter_trace
-
-        # ---- Step 2: Relax language, keep VIP + role ----
-        if needs_lang:
-            candidates = _hard_filter(office_managers, check_lang=False)
+        # ---- Step 1: Strict filter in target branch ----
+        if branch_managers:
+            candidates = _hard_filter(branch_managers, check_lang=True)
             if candidates:
-                filter_trace["applied_rules"] = self._build_rules_list(is_vip, is_data_change, False, language)
-                filter_trace["fallback_used"] = "relaxed_language"
-                filter_trace["no_candidate_after_hardskills"] = True
+                filter_trace["applied_rules"] = self._build_rules_list(is_vip, is_data_change, needs_lang, language)
+                filter_trace["fallback_used"] = None
                 return candidates, filter_trace
 
-        # ---- Step 3: Expand to Astana + Almaty, keep VIP + role ----
+            # ---- Step 2: Relax language in target branch ----
+            if needs_lang:
+                candidates = _hard_filter(branch_managers, check_lang=False)
+                if candidates:
+                    filter_trace["applied_rules"] = self._build_rules_list(is_vip, is_data_change, False, language)
+                    filter_trace["fallback_used"] = "relaxed_language_in_branch"
+                    filter_trace["no_candidate_after_hardskills"] = True
+                    return candidates, filter_trace
+
+        # ---- Step 3: Strict filter in target city (all branches) ----
+        if city_managers:
+            candidates = _hard_filter(city_managers, check_lang=True)
+            if candidates:
+                filter_trace["applied_rules"] = self._build_rules_list(is_vip, is_data_change, needs_lang, language)
+                filter_trace["fallback_used"] = "expanded_to_city_strict"
+                filter_trace["no_candidate_after_hardskills"] = False
+                return candidates, filter_trace
+
+            # ---- Step 4: Relax language in target city ----
+            if needs_lang:
+                candidates = _hard_filter(city_managers, check_lang=False)
+                if candidates:
+                    filter_trace["applied_rules"] = self._build_rules_list(is_vip, is_data_change, False, language)
+                    filter_trace["fallback_used"] = "relaxed_language_in_city"
+                    filter_trace["no_candidate_after_hardskills"] = True
+                    return candidates, filter_trace
+                    
+            # ---- Step 5: Absolute fallback to ANY active manager in the target city ----
+            # The client exists in this city, we MUST exhaust city managers before leaving the city.
+            # We respect VIP if possible.
+            if is_vip:
+                vip_city = [m for m in city_managers if isinstance(m.skills, list) and "VIP" in m.skills]
+                candidates = vip_city if vip_city else city_managers
+            else:
+                candidates = city_managers
+                
+            if candidates:
+                filter_trace["applied_rules"] = []
+                filter_trace["fallback_used"] = "any_manager_in_same_city"
+                filter_trace["no_candidate_after_hardskills"] = True
+                return sorted(candidates, key=lambda m: m.current_load)[:5], filter_trace
+
+        # ---- Step 6: Expand to Astana + Almaty, keep VIP + role ----
+        # Only reached if the target city has literally ZERO active managers
         if office_city not in ("Астана", "Алматы"):
             main_managers = _get_active_managers(
-                db.query(Manager).filter(Manager.office_location.in_(["Астана", "Алматы"]))
+                db.query(Manager).join(Office).filter(Office.city.in_(["Астана", "Алматы"]))
             )
             candidates = _hard_filter(main_managers, check_lang=False)
             if candidates:
@@ -277,7 +366,7 @@ class TicketRouter:
     # Step D: Load Balance + Round Robin
     # ------------------------------------------------------------------
 
-    def _load_balance(self, candidates: list["Manager"], office_city: str,
+    def _load_balance(self, candidates: list["Manager"], branch_id: Optional[int],
                       db) -> tuple[Optional["Manager"], dict]:
         """
         Pick the best manager from candidates using top-2 + round robin.
@@ -320,14 +409,15 @@ class TicketRouter:
         candidate_key = f"{min(top_two[0].id, top_two[1].id)}_{max(top_two[0].id, top_two[1].id)}"
 
         # Look up or create RR state
+        rr_office_id = branch_id if branch_id is not None else 0
         rr = db.query(RoundRobinState).filter(
-            RoundRobinState.office_city == office_city,
+            RoundRobinState.office_id == rr_office_id,
             RoundRobinState.candidate_key == candidate_key,
         ).first()
 
         if rr is None:
             rr = RoundRobinState(
-                office_city=office_city,
+                office_id=rr_office_id,
                 candidate_key=candidate_key,
                 pointer=0,
             )
@@ -398,22 +488,26 @@ class TicketRouter:
             # 1. Geo-routing
             geo_res = self._geo_route(ai_analysis, client_city, client_region, offices, ticket_id)
             office_city = geo_res["city"]
+            routed_branch_id = geo_res["branch_id"]
             office_rule = geo_res["rule"]
+            alternative_branches = geo_res.get("alternative_branches", [])
             flags.update(geo_res.get("flags", {}))
 
             # 2. Skill filter
             candidates, filter_trace = self._skill_filter(
-                db, office_city, segment, ai_analysis["type"], ai_analysis["language"]
+                db, routed_branch_id, office_city, segment, ai_analysis["type"], ai_analysis["language"]
             )
             if filter_trace.get("no_candidate_after_hardskills"):
                 flags["no_candidate_after_hardskills"] = True
 
             # 3. Load balancing + Round Robin
-            manager, lb_trace = self._load_balance(candidates, office_city, db)
+            manager, lb_trace = self._load_balance(candidates, routed_branch_id, db)
 
             if manager:
                 manager.current_load += 1
                 db.flush()
+                if routed_branch_id is None:
+                    routed_branch_id = manager.office_id
 
             if lb_trace.get("invalid_load_coerced"):
                 flags["invalid_load"] = True
@@ -422,6 +516,8 @@ class TicketRouter:
             routing_trace = {
                 "geo_decision": {
                     "resolved_city": geo_res.get("city"),
+                    "branch_id": routed_branch_id,
+                    "branch_name": geo_res.get("branch_name"),
                     "rule": office_rule,
                     "distance_km": geo_res.get("distance_km"),
                 },
@@ -434,6 +530,8 @@ class TicketRouter:
                 "assigned_manager_id": manager.id if manager else None,
                 "assigned_manager_name": manager.name if manager else "Unassigned",
                 "office_city": office_city,
+                "routed_branch_id": routed_branch_id,
+                "alternative_branches": alternative_branches,
                 "office_rule": office_rule,
                 "routing_trace": routing_trace,
                 "flags": flags,
@@ -581,6 +679,8 @@ class TicketRouter:
                             client_city=city,
                             client_address=f"{row.get('Улица', '')}, {row.get('Дом', '')}".strip(", "),
                             office_rule="spam_skip",
+                            routed_branch_id=None,
+                            alternative_branches=[],
                             routing_trace={"spam": True},
                             flags=flags,
                         )
@@ -593,22 +693,26 @@ class TicketRouter:
                     # ---- Geo-routing ----
                     geo_res = self._geo_route(ai_analysis, city, region, offices, guid)
                     office_city = geo_res["city"]
+                    routed_branch_id = geo_res["branch_id"]
                     office_rule = geo_res["rule"]
+                    alternative_branches = geo_res.get("alternative_branches", [])
                     flags.update(geo_res.get("flags", {}))
 
                     # ---- Skill filter ----
                     candidates, filter_trace = self._skill_filter(
-                        db, office_city, segment, ai_analysis["type"], ai_analysis["language"]
+                        db, routed_branch_id, office_city, segment, ai_analysis["type"], ai_analysis["language"]
                     )
                     if filter_trace.get("no_candidate_after_hardskills"):
                         flags["no_candidate_after_hardskills"] = True
 
                     # ---- Load balance + RR ----
-                    manager, lb_trace = self._load_balance(candidates, office_city, db)
+                    manager, lb_trace = self._load_balance(candidates, routed_branch_id, db)
 
                     if manager:
                         manager.current_load += 1
                         db.flush()
+                        if routed_branch_id is None:
+                            routed_branch_id = manager.office_id
 
                     if lb_trace.get("invalid_load_coerced"):
                         flags["invalid_load"] = True
@@ -617,6 +721,8 @@ class TicketRouter:
                     routing_trace = {
                         "geo_decision": {
                             "resolved_city": geo_res.get("city"),
+                            "branch_id": routed_branch_id,
+                            "branch_name": geo_res.get("branch_name"),
                             "rule": office_rule,
                             "distance_km": geo_res.get("distance_km"),
                         },
@@ -637,6 +743,8 @@ class TicketRouter:
                         "ai_summary": ai_analysis.get("summary", ""),
                         "ai_confidence": ai_analysis.get("confidence", 0.5),
                         "routed_office": office_city,
+                        "routed_branch_id": routed_branch_id,
+                        "alternative_branches": alternative_branches,
                         "office_rule": office_rule,
                         "assigned_manager": manager.name if manager else "Unassigned",
                         "assigned_manager_id": manager.id if manager else None,
@@ -659,6 +767,8 @@ class TicketRouter:
                         client_city=city,
                         client_address=f"{row.get('Улица', '')}, {row.get('Дом', '')}".strip(", "),
                         office_rule=office_rule,
+                        routed_branch_id=routed_branch_id,
+                        alternative_branches=alternative_branches,
                         routing_trace=routing_trace,
                         flags=flags,
                         workload_at_assignment=lb_trace.get("workload_at_assignment"),

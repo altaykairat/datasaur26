@@ -54,11 +54,13 @@ class Manager(Base):
     name = Column(String(200), nullable=False)
     role = Column(String(100), nullable=False)  # Специалист, Ведущий специалист, Главный специалист
     skills = Column(JSON, nullable=False, default=list)  # ["VIP", "ENG", "KZ"]
-    office_location = Column(String(100), nullable=False)
+    office_location = Column(String(100), nullable=True) # Legacy city name
+    office_id = Column(Integer, ForeignKey("offices.id"), nullable=True) # Specific branch ID
     current_load = Column(Integer, nullable=False, default=0)
     is_active = Column(Boolean, nullable=False, default=True)
 
     user_account = relationship("User", back_populates="manager", uselist=False)
+    office = relationship("Office", back_populates="managers")
     assigned_tickets = relationship("Ticket", back_populates="assigned_manager")
 
     def __repr__(self):
@@ -80,6 +82,8 @@ class Ticket(Base):
     client_city = Column(String(100), nullable=True)
     client_address = Column(Text, nullable=True)
     office_rule = Column(String(100), nullable=True)  # How office was selected
+    routed_branch_id = Column(Integer, ForeignKey("offices.id"), nullable=True) # The exact assigned branch
+    alternative_branches = Column(JSON, nullable=True) # List of fallback branches
     routing_trace = Column(JSON, nullable=True)  # Full audit trail of routing decisions
     flags = Column(JSON, nullable=True)  # Boolean flags dict
     workload_at_assignment = Column(Integer, nullable=True)  # Manager load when assigned
@@ -87,6 +91,7 @@ class Ticket(Base):
 
     customer = relationship("User", back_populates="tickets", foreign_keys=[customer_id])
     assigned_manager = relationship("Manager", back_populates="assigned_tickets")
+    routed_branch = relationship("Office", foreign_keys=[routed_branch_id])
 
     def __repr__(self):
         return f"<Ticket(id={self.id}, status='{self.status}')>"
@@ -96,10 +101,13 @@ class Office(Base):
     __tablename__ = "offices"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    city = Column(String(100), nullable=False, unique=True)
+    city = Column(String(100), nullable=False) # Removed unique=True
+    name = Column(String(150), unique=True, nullable=True) # Specific branch name
     address = Column(Text, nullable=True)
     lat = Column(Float, nullable=True)
     lon = Column(Float, nullable=True)
+
+    managers = relationship("Manager", back_populates="office")
 
     def __repr__(self):
         return f"<Office(city='{self.city}', lat={self.lat}, lon={self.lon})>"
@@ -110,7 +118,7 @@ class RoundRobinState(Base):
     __tablename__ = "rr_state"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    office_city = Column(String(100), nullable=False)
+    office_id = Column(Integer, nullable=False) # Changed from city to branch ID
     candidate_key = Column(String(50), nullable=False)  # e.g. "12_34" sorted manager IDs
     pointer = Column(Integer, nullable=False, default=0)
 

@@ -70,11 +70,16 @@ def seed_managers(db):
             if existing:
                 continue
 
+            # Find the branch ID
+            office_obj = db.query(Office).filter(Office.city == office).first()
+            office_id = office_obj.id if office_obj else None
+
             manager = Manager(
                 name=name,
                 role=role,
                 skills=skills,
                 office_location=office,
+                office_id=office_id,
                 current_load=0,  # Always start fresh; load accumulates from routing
                 is_active=True,
             )
@@ -103,18 +108,21 @@ def seed_offices(db):
             if not city:
                 continue
 
-            existing = db.query(Office).filter(Office.city == city).first()
+            # Check if this exact branch name already exists
+            branch_name = f"{city}, {address}" if address else f"{city}, Главный офис"
+            existing = db.query(Office).filter(Office.name == branch_name).first()
             if existing:
                 continue
 
             coords = CITY_COORDS.get(city, (51.1694, 71.4491))  # Default to Astana
-            office = Office(
+            office_obj = Office(
                 city=city,
+                name=branch_name,
                 address=address,
                 lat=coords[0],
                 lon=coords[1],
             )
-            db.add(office)
+            db.add(office_obj)
             count += 1
 
     db.flush()
