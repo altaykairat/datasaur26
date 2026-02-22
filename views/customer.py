@@ -64,6 +64,20 @@ def _render_create_ticket():
             help="If your issue involves an error screen, attach a screenshot. We'll extract text from it automatically."
         )
 
+        addr_col1, addr_col2 = st.columns(2)
+        with addr_col1:
+            client_city = st.text_input(
+                "City (optional)",
+                placeholder="e.g. Алматы",
+                help="Your city helps us route to the nearest office."
+            )
+        with addr_col2:
+            client_street = st.text_input(
+                "Street & house (optional)",
+                placeholder="e.g. Абая, 10",
+                help="Your street address for the manager's reference."
+            )
+
         submitted = st.form_submit_button("Submit Ticket", use_container_width=True, type="primary")
 
         if submitted:
@@ -103,7 +117,7 @@ def _render_create_ticket():
                         result = router.route_single_ticket(
                             ticket_description=final_description,
                             segment="Mass", # Default for customer portal
-                            client_city=None, # Optionally get from user profile in future
+                            client_city=client_city.strip() if client_city else None,
                             client_region=None,
                             ticket_id="",
                             db=db
@@ -129,6 +143,8 @@ def _render_create_ticket():
                             flags=result["flags"],
                             correlation_id=result["correlation_id"],
                             workload_at_assignment=result.get("workload_at_assignment"),
+                            client_city=client_city.strip() if client_city else None,
+                            client_address=client_street.strip() if client_street else None,
                             created_at=datetime.now(timezone.utc),
                         )
                         db.add(ticket)

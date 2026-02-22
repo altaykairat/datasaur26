@@ -22,7 +22,7 @@ def render_statistics():
         spam_tickets = db.query(Ticket).filter(Ticket.status == "Spam").count()
 
         # Metric cards
-        col1, col2, col3, col4, col5, col6 = st.columns(6)
+        col1, col2, col3, col4 = st.columns(4)
         with col1:
             st.markdown(f"""<div class="metric-card">
                 <h3>Total Tickets</h3>
@@ -30,25 +30,15 @@ def render_statistics():
             </div>""", unsafe_allow_html=True)
         with col2:
             st.markdown(f"""<div class="metric-card">
-                <h3>New</h3>
-                <div class="value">{new_tickets}</div>
-            </div>""", unsafe_allow_html=True)
-        with col3:
-            st.markdown(f"""<div class="metric-card">
                 <h3>Assigned</h3>
                 <div class="value">{assigned_tickets}</div>
             </div>""", unsafe_allow_html=True)
-        with col4:
+        with col3:
             st.markdown(f"""<div class="metric-card">
                 <h3>Closed</h3>
                 <div class="value">{closed_tickets}</div>
             </div>""", unsafe_allow_html=True)
-        with col5:
-            st.markdown(f"""<div class="metric-card">
-                <h3>Failed</h3>
-                <div class="value">{failed_tickets}</div>
-            </div>""", unsafe_allow_html=True)
-        with col6:
+        with col4:
             st.markdown(f"""<div class="metric-card">
                 <h3>Spam</h3>
                 <div class="value">{spam_tickets}</div>
