@@ -23,78 +23,36 @@ st.set_page_config(
 
 
 def _inject_css():
-    """Inject custom CSS for the locked Light Theme."""
-    # Hardcoded beautiful Light Theme Colors
-    bg = "#FFFFFF"
-    bg_secondary = "#F8F9FA"
-    border = "#E5E7EB"
-    text_primary = "#111827"
-    text_secondary = "#6B7280"
-    sidebar_bg = "#F9FAFB"
-    sidebar_border = "#E5E7EB"
-    card_bg = "#FFFFFF"
-    input_bg = "#F9FAFB"
-    banner_bg = "#F0F4FF"
-
-    accent = "#F59E0B"
-    accent_hover = "#D97706"
-
+    """Inject custom CSS to enhance layout while respecting Streamlit's native Light/Dark themes."""
     st.markdown(f"""
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
 
-        /* ---- Apply font family and core backgrounds ---- */
+        /* ---- Apply font family ---- */
         html, body, [class*="css"] {{
             font-family: 'Inter', sans-serif;
-        }}
-        
-        .stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"] {{
-            background-color: {bg} !important;
-            color: {text_primary} !important;
-        }}
-
-        [data-testid="stSidebar"], [data-testid="stSidebar"] > div:first-child {{
-            background: {sidebar_bg} !important;
-            border-right: 1px solid {sidebar_border};
-        }}
-
-        /* ---- All text elements ---- */
-        .stApp h1, .stApp h2, .stApp h3, .stApp h4, .stApp h5, .stApp h6,
-        .stApp p, .stApp span, .stApp label, .stApp div {{
-            color: {text_primary};
-        }}
-
-        .stApp .stCaption, [data-testid="stCaptionContainer"] {{
-            color: {text_secondary} !important;
-        }}
-
-        /* ---- Tabs text color adjustment ---- */
-        .stTabs [data-baseweb="tab"] {{
-            color: {text_secondary};
-        }}
-        .stTabs [aria-selected="true"] {{
-            color: {accent} !important;
         }}
 
         /* ---- Custom classes for FIRE layout ---- */
         .fire-header {{
-            color: {text_primary};
             font-size: 1.8rem;
             font-weight: 700;
             letter-spacing: -0.02em;
             margin-bottom: 0.2rem;
+            color: var(--text-color);
         }}
 
         .fire-subtitle {{
-            color: {text_secondary};
             font-size: 0.9rem;
             font-weight: 400;
             margin-bottom: 1.5rem;
+            color: var(--text-color);
+            opacity: 0.7;
         }}
 
         .metric-card {{
-            background: {card_bg};
-            border: 1px solid {border};
+            background: var(--secondary-background-color);
+            border: 1px solid rgba(128, 128, 128, 0.2);
             border-radius: 10px;
             padding: 1.2rem 1.4rem;
             margin: 0.4rem 0;
@@ -102,22 +60,23 @@ def _inject_css():
         }}
 
         .metric-card:hover {{
-            border-color: {accent};
+            border-color: var(--primary-color);
         }}
 
         .metric-card h3 {{
-            color: {text_secondary} !important;
             margin: 0 0 0.4rem 0;
             font-size: 0.75rem;
             font-weight: 500;
             text-transform: uppercase;
             letter-spacing: 0.06em;
+            color: var(--text-color);
+            opacity: 0.8;
         }}
 
         .metric-card .value {{
-            color: {text_primary} !important;
             font-size: 1.8rem;
             font-weight: 700;
+            color: var(--text-color);
         }}
 
         .metric-card .value.sm {{
@@ -126,7 +85,7 @@ def _inject_css():
 
         .fire-divider {{
             height: 1px;
-            background: {border};
+            background: rgba(128, 128, 128, 0.2);
             margin: 1.2rem 0;
             border: none;
         }}
@@ -136,36 +95,21 @@ def _inject_css():
             font-weight: 500;
             letter-spacing: 0.01em;
             transition: all 0.2s ease;
-            background-color: {card_bg} !important;
-            color: {text_primary} !important;
-            border: 1px solid {border} !important;
-        }}
-
-        .stButton > button[kind="primary"] {{
-            background-color: {accent} !important;
-            color: white !important;
-            border: none !important;
         }}
 
         .stButton > button:hover {{
             transform: translateY(-1px);
-            border-color: {accent} !important;
-            color: {accent} !important;
-        }}
-
-        .stButton > button[kind="primary"]:hover {{
-            background-color: {accent_hover} !important;
-            color: white !important;
         }}
 
         .info-banner {{
-            background: {banner_bg};
-            border-left: 3px solid {accent};
+            background: var(--secondary-background-color);
+            border-left: 3px solid var(--primary-color);
             border-radius: 0 8px 8px 0;
             padding: 0.8rem 1.2rem;
             margin: 0.5rem 0;
-            color: {text_secondary};
+            color: var(--text-color);
             font-size: 0.88rem;
+            opacity: 0.9;
         }}
 
         .spam-badge {{
