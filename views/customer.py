@@ -110,7 +110,7 @@ def _render_create_ticket():
                 st.error("Please describe your issue or attach a readable screenshot.")
             else:
                 with st.spinner("Analyzing and routing your ticket..."):
-                    router = TicketRouter(ai_mode="deepseek")  # Or phi4 depending on default
+                    router = TicketRouter()  # Uses default 'qwen' or ENV defined default
                     
                     with get_db() as db:
                         # Call routing pipeline

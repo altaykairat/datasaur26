@@ -157,15 +157,13 @@ class BatchProcessor:
                     if is_empty_ticket:
                         ai_analysis = {
                             "type": "Неизвестно", "priority": 5, "language": "RU",
-                            "sentiment": "neutral", "confidence": 0.0,
+                            "sentiment": "Нейтральный", "confidence": 0.0,
                             "summary": "No description or attachment provided."
                         }
                     elif has_link:
-                        ai_analysis = {
-                            "type": "Мошеннические действия", "priority": 1, "language": "RU",
-                            "sentiment": "negative", "confidence": 0.99,
-                            "summary": "Ticket contains an external link, flagged as potential fraud."
-                        }
+                        ai_analysis = self.router._enrich(description)
+                        # The enrichment will already have the link warning if handled by router
+                        # but we ensure the sentiment is normalized by the engine.
                     else:
                         ai_analysis = self.router._enrich(description)
 

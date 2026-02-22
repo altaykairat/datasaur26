@@ -103,17 +103,15 @@ class TicketRouter:
             if is_empty_ticket:
                 ai_analysis = {
                     "type": "Неизвестно", "priority": 5, "language": "RU",
-                    "sentiment": "neutral", "confidence": 0.0,
+                    "sentiment": "Нейтральный", "confidence": 0.0,
                     "summary": "No description or attachment provided."
-                }
-            elif has_link:
-                ai_analysis = {
-                    "type": "Мошеннические действия", "priority": 1, "language": "RU",
-                    "sentiment": "negative", "confidence": 0.99,
-                    "summary": "Ticket contains an external link, flagged as potential fraud."
                 }
             else:
                 ai_analysis = self._enrich(ticket_description)
+                
+                # Safety prefix for links
+                if has_link:
+                    ai_analysis["summary"] = f"⚠️ [В ТЕКСТЕ ОБНАРУЖЕНА ССЫЛКА] " + ai_analysis.get("summary", "")
                 
                 # Vision processing step
                 if attachment_path and not ai_analysis.get("ai_fallback"):

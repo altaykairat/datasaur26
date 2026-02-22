@@ -15,17 +15,29 @@ def render_batch_routing():
     with col1:
         ai_mode = st.radio(
             "AI Engine",
-            ["DeepSeek", "Phi-4 Local"],
-            index=0,
-            help="DeepSeek = Cloud API. Phi-4 = Local via Ollama."
+            ["DeepSeek", "Phi-4 Local", "Qwen 2.5 + Vision", "vLLM (Production)"],
+            index=2,  # Default to Qwen
+            help="DeepSeek = Cloud API. Phi-4/Qwen = Local via Ollama. vLLM = Production cluster."
         )
     with col2:
+        info_map = {
+            "DeepSeek": ("DeepSeek", "Cloud-based API. Requires DEEPSEEK_API_KEY in .env"),
+            "Phi-4 Local": ("Phi-4 Local", "Runs locally via Ollama. Ensure phi4 is pulled."),
+            "Qwen 2.5 + Vision": ("Qwen 2.5 + Vision", "Local Qwen2.5-14B + MiniCPM-V vision split. Optimized for RTX 5000."),
+            "vLLM (Production)": ("vLLM (Production)", "Production target with Continuous Batching & PagedAttention.")
+        }
+        title, desc = info_map[ai_mode]
         st.markdown(f"""<div class="info-banner">
-            <strong>{"DeepSeek" if ai_mode == "DeepSeek" else "Phi-4 Local"}</strong> —
-            {"Cloud-based API. Requires DEEPSEEK_API_KEY in .env" if ai_mode == "DeepSeek" else "Runs locally via Ollama. Ensure ollama serve is running and phi4 is pulled."}
+            <strong>{title}</strong> — {desc}
         </div>""", unsafe_allow_html=True)
 
-    mode_key = "deepseek" if ai_mode == "DeepSeek" else "phi4"
+    mode_map = {
+        "DeepSeek": "deepseek",
+        "Phi-4 Local": "phi4",
+        "Qwen 2.5 + Vision": "qwen",
+        "vLLM (Production)": "vllm"
+    }
+    mode_key = mode_map[ai_mode]
 
     st.markdown('<div class="fire-divider"></div>', unsafe_allow_html=True)
 

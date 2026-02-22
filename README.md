@@ -198,6 +198,9 @@ python -m database.seed
 # 6. Run
 streamlit run app.py
 # Default admin login: admin / admin
+
+#on server run:
+& 'C:\Program Files\PostgreSQL\16\bin\pg_ctl.exe' -D .\pgdata stop; Remove-Item -Recurse -Force .\pgdata; & 'C:\Program Files\PostgreSQL\16\bin\initdb.exe' -D .\pgdata -U postgres -A trust -E UTF8 --locale=C; & 'C:\Program Files\PostgreSQL\16\bin\pg_ctl.exe' -D .\pgdata -o '-p 5433' -l .\pg.log start; Start-Sleep -Seconds 2; & 'C:\Program Files\PostgreSQL\16\bin\createdb.exe' -p 5433 -U postgres fire_db; python -m database.seed
 ```
 
 ## AI Modes
