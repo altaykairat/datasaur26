@@ -108,37 +108,59 @@ class TicketRouter:
                     "summary": "No description or attachment provided."
                 }
             else:
-                ai_analysis = self._enrich(ticket_description)
-                
-                # Safety prefix for links
-                if has_link:
-                    ai_analysis["summary"] = f"⚠️ [В ТЕКСТЕ ОБНАРУЖЕНА ССЫЛКА] " + ai_analysis.get("summary", "")
-                
-                # Vision processing step
-                # Run vision ONLY for qwen mode (user request)
                 can_run_vision = (self.ai_engine.mode == "qwen")
-                if attachment_path and can_run_vision:
-                    # If ai_fallback is true, use a generic instruction
-                    instruction = ai_analysis.get("image_extraction_instruction", "Опиши детали на изображении.")
+                is_empty_text = flags.get("is_empty_text", False)
+
+                if is_empty_text and attachment_path and can_run_vision:
+                    # Run vision FIRST to generate a text description for Qwen
                     try:
                         with ModelConcurrency.get_vision_semaphore():
-                            vision_res = self.vision_engine.analyze_image(attachment_path, instruction)
+                            vision_res = self.vision_engine.analyze_image(attachment_path, "Опиши проблему на этом экране или документе")
                             
-                        # Merge vision results deterministically
+                        desc_from_vision = vision_res.get("image_summary", "")
+                        if vision_res.get("extracted_text"):
+                            desc_from_vision += "\n" + vision_res.get("extracted_text")
+                            
+                        ai_analysis = self._enrich(f"[Изображение]: {desc_from_vision}")
+                        
                         if vision_res.get("has_error_message"):
                             flags["image_has_error"] = True
                         if not vision_res.get("vision_fallback"):
                             ai_analysis["summary"] += f" [Вложение: {vision_res.get('image_summary')}]"
-                            if vision_res.get("extracted_text"):
-                                ai_analysis["summary"] += f" [Извлеченный текст: {vision_res.get('extracted_text')}]"
+                            
                     except Exception as ve:
                         logger.error(f"Vision enrichment failure: {ve}", exc_info=True)
                         flags["vision_processing_failed"] = True
+                        ai_analysis = self._enrich(ticket_description)
+                else:
+                    ai_analysis = self._enrich(ticket_description)
+                    
+                    # Safety prefix for links
+                    if has_link:
+                        ai_analysis["summary"] = f"⚠️ [В ТЕКСТЕ ОБНАРУЖЕНА ССЫЛКА] " + ai_analysis.get("summary", "")
+                    
+                    # Vision processing step
+                    if attachment_path and can_run_vision:
+                        instruction = ai_analysis.get("image_extraction_instruction", "Опиши детали на изображении.")
+                        try:
+                            with ModelConcurrency.get_vision_semaphore():
+                                vision_res = self.vision_engine.analyze_image(attachment_path, instruction)
+                                
+                            if vision_res.get("has_error_message"):
+                                flags["image_has_error"] = True
+                            if not vision_res.get("vision_fallback"):
+                                ai_analysis["summary"] += f" [Вложение: {vision_res.get('image_summary')}]"
+                                if vision_res.get("extracted_text"):
+                                    ai_analysis["summary"] += f" [Извлеченный текст: {vision_res.get('extracted_text')}]"
+                        except Exception as ve:
+                            logger.error(f"Vision enrichment failure: {ve}", exc_info=True)
+                            flags["vision_processing_failed"] = True
+
                 # ---- FLAG LOGIC (Mutually Exclusive) ----
+                ai_type = ai_analysis.get("type", "Неизвестно")
                 is_spam = (ai_type == "Спам")
                 is_fraud = (ai_type == "Мошеннические действия")
                 has_attachment = bool(attachment_path)
-                is_empty_text = flags.get("is_empty_text", False)
                 has_link = flags.get("contains_link", False)
 
                 # 1. Review (Yellow)

@@ -170,39 +170,63 @@ class BatchProcessor:
                             "sentiment": "Нейтральный", "confidence": 0.0,
                             "summary": "No description or attachment provided."
                         }
-                    elif has_link:
-                        ai_analysis = self.router._enrich(description)
-                        # The enrichment will already have the link warning if handled by router
-                        # but we ensure the sentiment is normalized by the engine.
                     else:
-                        ai_analysis = self.router._enrich(description)
+                        can_run_vision = (self.router.ai_engine.mode == "qwen")
+                        has_attachment = bool(flags.get("attachment_path"))
+                        is_empty_text = flags.get("is_empty_text", False)
 
-                        # Vision processing step for batch
-                        # Run vision ONLY for qwen mode (user request)
-                        if flags.get("attachment_path") and self.router.ai_engine.mode == "qwen":
-                            # If ai_fallback is true, use a generic instruction
-                            instruction = ai_analysis.get("image_extraction_instruction", "Опиши детали на изображении.")
+                        if is_empty_text and has_attachment and can_run_vision:
+                            # Run vision FIRST to build a description for Qwen
                             try:
                                 with ModelConcurrency.get_vision_semaphore():
                                     vision_res = self.router.vision_engine.analyze_image(
-                                        flags["attachment_path"], instruction
+                                        flags["attachment_path"], "Опиши проблему на этом экране или документе"
                                     )
                                     
+                                desc_from_vision = vision_res.get("image_summary", "")
+                                if vision_res.get("extracted_text"):
+                                    desc_from_vision += "\n" + vision_res.get("extracted_text")
+                                    
+                                ai_analysis = self.router._enrich(f"[Изображение]: {desc_from_vision}")
+                                
                                 if vision_res.get("has_error_message"):
                                     flags["image_has_error"] = True
                                 if not vision_res.get("vision_fallback"):
                                     ai_analysis["summary"] += f" [Вложение: {vision_res.get('image_summary')}]"
-                                    if vision_res.get("extracted_text"):
-                                        ai_analysis["summary"] += f" [Извлеченный текст: {vision_res.get('extracted_text')}]"
+                                    
                             except Exception as ve:
                                 logger.error(f"Vision enrichment failure (batch) Row {idx}: {ve}")
                                 flags["vision_processing_failed"] = True
+                                ai_analysis = self.router._enrich(description)
+                        else:
+                            ai_analysis = self.router._enrich(description)
+                            
+                            if has_link:
+                                ai_analysis["summary"] = f"⚠️ [В ТЕКСТЕ ОБНАРУЖЕНА ССЫЛКА] " + ai_analysis.get("summary", "")
+
+                            # Vision processing step for batch
+                            if has_attachment and can_run_vision:
+                                instruction = ai_analysis.get("image_extraction_instruction", "Опиши детали на изображении.")
+                                try:
+                                    with ModelConcurrency.get_vision_semaphore():
+                                        vision_res = self.router.vision_engine.analyze_image(
+                                            flags["attachment_path"], instruction
+                                        )
+                                        
+                                    if vision_res.get("has_error_message"):
+                                        flags["image_has_error"] = True
+                                    if not vision_res.get("vision_fallback"):
+                                        ai_analysis["summary"] += f" [Вложение: {vision_res.get('image_summary')}]"
+                                        if vision_res.get("extracted_text"):
+                                            ai_analysis["summary"] += f" [Извлеченный текст: {vision_res.get('extracted_text')}]"
+                                except Exception as ve:
+                                    logger.error(f"Vision enrichment failure (batch) Row {idx}: {ve}")
+                                    flags["vision_processing_failed"] = True
 
                         # ---- FLAG LOGIC (Mutually Exclusive) ----
-                        is_spam = ai_analysis["type"] == "Спам"
-                        is_fraud = ai_analysis["type"] == "Мошеннические действия"
-                        has_attachment = bool(flags.get("attachment_path"))
-                        is_empty_text = flags.get("is_empty_text", False)
+                        ai_type = ai_analysis.get("type", "Неизвестно")
+                        is_spam = (ai_type == "Спам")
+                        is_fraud = (ai_type == "Мошеннические действия")
                         has_link = flags.get("contains_link", False)
 
                         # 1. Review (Yellow)
