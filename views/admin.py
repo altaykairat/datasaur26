@@ -14,8 +14,8 @@ def render_admin():
     st.caption("Upload tickets, run auto-routing, view system statistics")
     st.markdown('<div class="fire-divider"></div>', unsafe_allow_html=True)
 
-    tab_routing, tab_stats, tab_manage = st.tabs([
-        "Batch Routing", "Statistics", "Management"
+    tab_routing, tab_stats, tab_manage, tab_ai = st.tabs([
+        "Batch Routing", "Statistics", "Management", "🌟 AI Analytics"
     ])
 
     with tab_routing:
@@ -26,6 +26,10 @@ def render_admin():
 
     with tab_manage:
         _render_management()
+
+    with tab_ai:
+        from views.vanna_dashboard import render_ai_dashboard
+        render_ai_dashboard()
 
 
 def _render_batch_routing():
