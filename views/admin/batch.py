@@ -152,7 +152,18 @@ def _run_batch_routing(df: pd.DataFrame, ai_mode: str):
         display_cols = ["client_guid", "ai_type", "ai_priority", "ai_language", "ai_sentiment", "ai_confidence",
                         "ai_summary", "routed_office", "office_rule", "assigned_manager", "segment", "status"]
         available_cols = [c for c in display_cols if c in results_df.columns]
-        st.dataframe(results_df[available_cols], use_container_width=True, hide_index=True)
+
+        def highlight_flags(row):
+            flags = row.get("flags", {})
+            if isinstance(flags, dict):
+                if flags.get("needs_review"):
+                    return ['background-color: rgba(255, 50, 50, 0.2)'] * len(row)
+                elif flags.get("needs_clarification"):
+                    return ['background-color: rgba(255, 200, 0, 0.2)'] * len(row)
+            return [''] * len(row)
+
+        styled_df = results_df.style.apply(highlight_flags, axis=1)
+        st.dataframe(styled_df, column_order=available_cols, use_container_width=True, hide_index=True)
 
         # Charts
         st.markdown('<div class="fire-divider"></div>', unsafe_allow_html=True)

@@ -89,13 +89,13 @@ def _render_workspace(manager_id: int):
         closed_tickets = [t for t in tickets if t.status == TicketStatus.CLOSED.value]
 
         tab_open, tab_closed = st.tabs([
-            f"Open ({len(open_tickets)})",
+            f"Open & Review Queue ({len(open_tickets)})",
             f"Closed ({len(closed_tickets)})"
         ])
 
         with tab_open:
             if not open_tickets:
-                st.info("No open tickets.")
+                st.info("No open tickets or tickets needing review.")
             else:
                 for ticket in open_tickets:
                     _render_ticket_card(ticket, db, manager_id)
@@ -138,12 +138,27 @@ def _render_ticket_card(ticket: Ticket, db, manager_id: int):
         else:
             priority_label = "Low"
 
-    with st.expander(f"Ticket #{ticket.id} · {ai_type} · Priority: {priority} ({priority_label})", expanded=False):
-        age = "—"
-        gender = "—"
-        if ticket.flags and isinstance(ticket.flags, dict):
-            age = ticket.flags.get("client_age", "—")
-            gender = ticket.flags.get("client_gender", "—")
+    needs_review = False
+    needs_clarification = False
+    age = "—"
+    gender = "—"
+    if ticket.flags and isinstance(ticket.flags, dict):
+        needs_review = ticket.flags.get("needs_review", False)
+        needs_clarification = ticket.flags.get("needs_clarification", False)
+        age = ticket.flags.get("client_age", "—")
+        gender = ticket.flags.get("client_gender", "—")
+
+    alert_icon = ""
+    if needs_review:
+        alert_icon = " 🔴 [NEEDS REVIEW]"
+    elif needs_clarification:
+        alert_icon = " 🟡 [CLARIFICATION]"
+
+    with st.expander(f"Ticket #{ticket.id} · {ai_type} · Priority: {priority} ({priority_label}){alert_icon}", expanded=False):
+        if needs_review:
+            st.error("⚠️ **ATTENTION REQUIRED:** This ticket was flagged by AI as needing human review (possible fraud, borderline spam, or medium confidence). Please inspect carefully.")
+        elif needs_clarification:
+            st.warning("⚠️ **CLARIFICATION NEEDED:** The AI had very low confidence or the description was too short. Please contact the client to clarify their request.")
 
         col1, col2, col3, col4, col5 = st.columns(5)
         with col1:

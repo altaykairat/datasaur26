@@ -20,12 +20,21 @@ def render_statistics():
             Ticket.status.in_(["EnrichFailed", "RoutingFailed", "DeadLetter"])
         ).count()
         spam_tickets = db.query(Ticket).filter(Ticket.status == "Spam").count()
+        
+        clarification_tickets = db.query(Ticket).filter(
+            (Ticket.status == "NeedsClarification") | 
+            (Ticket.flags.op('->>')('needs_clarification') == 'true')
+        ).count()
+        
+        review_tickets = db.query(Ticket).filter(
+            Ticket.flags.op('->>')('needs_review') == 'true'
+        ).count()
 
         # Metric cards
-        col1, col2, col3, col4 = st.columns(4)
+        col1, col2, col3, col4, col5, col6 = st.columns(6)
         with col1:
             st.markdown(f"""<div class="metric-card">
-                <h3>Total Tickets</h3>
+                <h3>Total</h3>
                 <div class="value">{total_tickets}</div>
             </div>""", unsafe_allow_html=True)
         with col2:
@@ -42,6 +51,16 @@ def render_statistics():
             st.markdown(f"""<div class="metric-card">
                 <h3>Spam</h3>
                 <div class="value">{spam_tickets}</div>
+            </div>""", unsafe_allow_html=True)
+        with col5:
+            st.markdown(f"""<div class="metric-card" style="border-left: 4px solid #FFC107;">
+                <h3>Clarify 🟡</h3>
+                <div class="value">{clarification_tickets}</div>
+            </div>""", unsafe_allow_html=True)
+        with col6:
+            st.markdown(f"""<div class="metric-card" style="border-left: 4px solid #F44336;">
+                <h3>Review 🔴</h3>
+                <div class="value">{review_tickets}</div>
             </div>""", unsafe_allow_html=True)
 
         st.markdown('<div class="fire-divider"></div>', unsafe_allow_html=True)
@@ -100,6 +119,7 @@ def render_statistics():
                     ai_type = t.ai_analysis_json.get("type", "—")
                 
                 flags_text = "—"
+                flag_indicator = ""
                 if t.flags and isinstance(t.flags, dict):
                     flags_list = []
                     for k, v in t.flags.items():
@@ -109,9 +129,15 @@ def render_statistics():
                             flags_list.append(f"{k.replace('_', ' ').title()}: {v}")
                     if flags_list:
                         flags_text = ", ".join(flags_list)
+                        
+                    if t.flags.get("needs_review"):
+                        flag_indicator = "🔴 "
+                    elif t.flags.get("needs_clarification"):
+                        flag_indicator = "🟡 "
 
                 ticket_rows.append({
                     "ID": t.id,
+                    "Flag": flag_indicator.strip() if flag_indicator else "—",
                     "Created": t.created_at.strftime("%Y-%m-%d %H:%M") if t.created_at else "—",
                     "Status": t.status,
                     "Segment": t.segment or "—",
@@ -122,6 +148,10 @@ def render_statistics():
             
             # Create DataFrame
             df_tickets = pd.DataFrame(ticket_rows)
+            
+            # Reorder columns slightly to put Flag near the front
+            cols = ["ID", "Flag", "Created", "Status", "Segment", "AI Type", "Assigned", "Office"]
+            df_tickets = df_tickets[cols]
             
             # Use on_select to capture row clicks
             event = st.dataframe(
@@ -140,7 +170,8 @@ def render_statistics():
                 
                 # Get the ID from the selected row index
                 row_idx = selected_rows[0]
-                inspect_id = ticket_rows[row_idx]["ID"]
+                # Because we reset 'ID' to be just t.id, it is a clean integer
+                inspect_id = int(df_tickets.iloc[row_idx]["ID"])
                 
                 inspect_t = db.query(Ticket).filter(Ticket.id == inspect_id).first()
                 if inspect_t:

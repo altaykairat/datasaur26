@@ -86,23 +86,21 @@ class TicketRouter:
                 if fk in ai_analysis:
                     flags[fk] = ai_analysis.pop(fk)
 
+            confidence = ai_analysis.get("confidence", 0.5)
+
             is_spam = ai_analysis["type"] == "Спам"
-            if is_spam:
+            if is_spam and confidence >= 0.60:
                 flags["spam_detected"] = True
-                return {
-                    "ai_analysis": ai_analysis,
-                    "assigned_manager_id": None,
-                    "assigned_manager_name": "Spam — not assigned",
-                    "office_city": "N/A",
-                    "office_rule": "spam_skip",
-                    "routed_branch_id": None,
-                    "alternative_branches": [],
-                    "routing_trace": {"spam": True},
-                    "flags": flags,
-                    "status": TicketStatus.SPAM.value,
-                    "correlation_id": correlation_id,
-                    "workload_at_assignment": None,
-                }
+            elif is_spam:
+                flags["needs_review"] = True
+
+            # Fraud check override
+            if ai_analysis["type"] == "Мошеннические действия" and confidence < 0.8:
+                flags["needs_review"] = True
+            elif confidence < 0.60 and not is_spam:
+                flags["needs_clarification"] = True
+            elif 0.60 <= confidence < 0.85 and not is_spam:
+                flags["needs_review"] = True
 
             # 2. Geo-routing
             offices = self._load_offices(db)
@@ -135,6 +133,12 @@ class TicketRouter:
             }
 
             ticket_status = TicketStatus.ASSIGNED.value if manager else TicketStatus.ROUTING_FAILED.value
+            
+            # Override status for flags but keep manager assignment
+            if flags.get("spam_detected"):
+                ticket_status = TicketStatus.SPAM.value
+            elif flags.get("needs_clarification"):
+                ticket_status = TicketStatus.NEEDS_CLARIFICATION.value
 
             return {
                 "ai_analysis": ai_analysis,
