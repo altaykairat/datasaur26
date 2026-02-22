@@ -10,8 +10,11 @@ import re
 
 from database.connection import get_db
 from database.models import Ticket, TicketStatus
-from utils.ocr import is_ocr_available, extract_text_from_image, combine_description_with_ocr
+from utils.ocr import (
+    is_ocr_available, extract_text_from_image, combine_description_with_ocr, resolve_image_path
+)
 from utils.logging import get_safe_logger
+from utils.concurrency import ModelConcurrency
 from engine.routing.geo import GeoRouter
 from engine.routing.skills import SkillMatcher
 from engine.routing.load_balancer import LoadBalancer
@@ -58,10 +61,16 @@ class BatchProcessor:
 
             for idx, row in df.iterrows():
                 correlation_id = self.router._generate_correlation_id()
+                result = None # Initialize to prevent leakage in except block
+                guid = str(row.get("GUID клиента", "")).strip() or str(uuid.uuid4())
+                description = "Not extracted"
+                segment = "Mass"
+                flags = {}
 
                 try:
                     # ---- Extract fields with safe defaults ----
-                    description = str(row.get("Описание ", "") or row.get("Описание", "") or "")
+                    original_description = str(row.get("Описание ", "") or row.get("Описание", "") or "")
+                    description = original_description
                     segment = str(row.get("Сегмент клиента", "Mass") or "Mass")
                     city = str(row.get("Населённый пункт", "") or "")
                     region = str(row.get("Область", "") or "")
@@ -88,31 +97,32 @@ class BatchProcessor:
                         except Exception:
                             pass
 
-                    # OCR extraction
-                    if is_ocr_available():
-                        for img_col in IMAGE_COLUMN_VARIANTS:
-                            img_source = row.get(img_col, "")
-                            if img_source and str(img_source).strip():
-                                source_path = str(img_source).strip()
-                                import os
-                                if not os.path.isabs(source_path) and not source_path.startswith("input/attachments"):
-                                    possible_path = os.path.join("input", "attachments", source_path)
-                                    if os.path.exists(possible_path):
-                                        source_path = possible_path
-                                
+                    for img_col in IMAGE_COLUMN_VARIANTS:
+                        img_source = row.get(img_col, "")
+                        if img_source and str(img_source).strip():
+                            source_path = resolve_image_path(str(img_source).strip())
+                            if source_path:
                                 flags["attachment_path"] = source_path
-                                ocr_result = extract_text_from_image(source_path)
-                                if ocr_result["success"]:
-                                    description = combine_description_with_ocr(description, ocr_result["text"])
-                                    flags["ocr_extracted"] = True
-                                    flags["ocr_source"] = ocr_result["source_type"]
-                                    flags["ocr_chars"] = len(ocr_result["text"])
-                                    logger.info(f"Row {idx}: OCR extracted {len(ocr_result['text'])} chars from {img_col}")
-                                    break
-                                else:
-                                    flags["ocr_failed"] = ocr_result.get("error", "unknown")
+                                # OCR extraction (optional if available)
+                                if is_ocr_available():
+                                    ocr_result = extract_text_from_image(source_path)
+                                    if ocr_result["success"]:
+                                        description = combine_description_with_ocr(description, ocr_result["text"])
+                                        flags["ocr_extracted"] = True
+                                        flags["ocr_source"] = ocr_result["source_type"]
+                                        flags["ocr_chars"] = len(ocr_result["text"])
+                                        logger.info(f"Row {idx}: OCR extracted {len(ocr_result['text'])} chars from {img_col}")
+                                    else:
+                                        flags["ocr_failed"] = ocr_result.get("error", "unknown")
+                                break
 
-                    is_empty_ticket = not description.strip() and not flags.get("attachment_path")
+                    # Check if vision should run based on model mode
+                    can_run_vision = (self.router.ai_engine.mode == "qwen")
+                    if flags.get("attachment_path") and not can_run_vision:
+                        flags["needs_review"] = True # Attachment exists but no vision capability for this model
+
+                    flags["is_empty_text"] = not original_description.strip()
+                    is_empty_ticket = flags["is_empty_text"] and not flags.get("attachment_path")
                     if is_empty_ticket:
                         flags["needs_review"] = True
                         flags["empty_ticket"] = True
@@ -167,28 +177,68 @@ class BatchProcessor:
                     else:
                         ai_analysis = self.router._enrich(description)
 
+                        # Vision processing step for batch
+                        # Run vision ONLY for qwen mode (user request)
+                        if flags.get("attachment_path") and self.router.ai_engine.mode == "qwen":
+                            # If ai_fallback is true, use a generic instruction
+                            instruction = ai_analysis.get("image_extraction_instruction", "Опиши детали на изображении.")
+                            try:
+                                with ModelConcurrency.get_vision_semaphore():
+                                    vision_res = self.router.vision_engine.analyze_image(
+                                        flags["attachment_path"], instruction
+                                    )
+                                    
+                                if vision_res.get("has_error_message"):
+                                    flags["image_has_error"] = True
+                                if not vision_res.get("vision_fallback"):
+                                    ai_analysis["summary"] += f" [Вложение: {vision_res.get('image_summary')}]"
+                                    if vision_res.get("extracted_text"):
+                                        ai_analysis["summary"] += f" [Извлеченный текст: {vision_res.get('extracted_text')}]"
+                            except Exception as ve:
+                                logger.error(f"Vision enrichment failure (batch) Row {idx}: {ve}")
+                                flags["vision_processing_failed"] = True
+
+                        # ---- FLAG LOGIC (Mutually Exclusive) ----
+                        is_spam = ai_analysis["type"] == "Спам"
+                        is_fraud = ai_analysis["type"] == "Мошеннические действия"
+                        has_attachment = bool(flags.get("attachment_path"))
+                        is_empty_text = flags.get("is_empty_text", False)
+                        has_link = flags.get("contains_link", False)
+
+                        # 1. Review (Yellow)
+                        if is_spam or (has_attachment and is_empty_text):
+                            flags["needs_review"] = True
+                            flags["needs_clarification"] = False
+                        # 2. Clarify (Green)
+                        elif (has_attachment and not is_empty_text) or (has_link and not is_spam and not is_fraud):
+                            flags["needs_clarification"] = True
+                            flags["needs_review"] = False
+                        else:
+                            # Clear flags if conditions no longer met
+                            flags["needs_review"] = False
+                            flags["needs_clarification"] = False
+
                         for fk in ("ai_fallback", "ai_schema_error", "ai_type_low_confidence",
-                                   "needs_clarification", "language_confidence"):
+                                   "language_confidence"):
                             if fk in ai_analysis:
                                 flags[fk] = ai_analysis.pop(fk)
 
                         confidence = ai_analysis.get("confidence", 0.5)
 
-                        is_spam = ai_analysis["type"] == "Спам"
-                        if is_spam and confidence >= 0.60:
-                            flags["spam_detected"] = True
-                        elif is_spam:
-                            flags["needs_review"] = True
+                        # Manual/Low confidence flags (secondary to the main rules above)
+                        if confidence < 0.60 and not is_spam and not is_fraud:
+                            # If it's already Review, keep it Review. Otherwise Clarify.
+                            if not flags.get("needs_review"):
+                                flags["needs_clarification"] = True
+                        elif 0.60 <= confidence < 0.85 and not is_spam and not is_fraud:
+                            # If it's already Review, keep it Review. Otherwise Clarify.
+                            if not flags.get("needs_review") and not flags.get("needs_clarification"):
+                                pass
 
-                        # Fraud check override
-                        if ai_analysis["type"] == "Мошеннические действия" and confidence < 0.8:
-                            flags["needs_review"] = True
-                        elif confidence < 0.60 and not is_spam:
-                            flags["needs_clarification"] = True
-                        elif 0.60 <= confidence < 0.85 and not is_spam:
-                            flags["needs_review"] = True
+                    is_fraud = not is_empty_ticket and ai_analysis.get("type") == "Мошеннические действия"
+                    bypass_assignment = is_empty_ticket or flags.get("needs_review") or is_fraud
 
-                    if not is_empty_ticket:
+                    if not bypass_assignment:
                         # ---- Geo-routing ----
                         geo_res = GeoRouter.route(ai_analysis, city, region, offices, guid)
                         office_city = geo_res["city"]
@@ -219,9 +269,9 @@ class BatchProcessor:
                         manager = None
                         office_city = city
                         routed_branch_id = None
-                        office_rule = "empty_ticket_skipped"
+                        office_rule = "assignment_bypassed" if not is_empty_ticket else "empty_ticket_skipped"
                         alternative_branches = []
-                        geo_res = {"city": city, "branch_id": None, "rule": "empty_ticket_skipped"}
+                        geo_res = {"city": city, "branch_id": None, "rule": office_rule}
                         filter_trace = {"skipped": True}
                         lb_trace = {"skipped": True}
 
@@ -239,9 +289,11 @@ class BatchProcessor:
 
                     ticket_status = TicketStatus.ASSIGNED.value if manager else TicketStatus.ROUTING_FAILED.value
 
-                    # Override status for flags but keep manager assignment
-                    if flags.get("spam_detected"):
-                        ticket_status = TicketStatus.SPAM.value
+                    # Override status for flags
+                    if is_fraud:
+                        ticket_status = TicketStatus.ROUTING_FAILED.value # Red
+                    elif flags.get("needs_review"):
+                        ticket_status = TicketStatus.NEEDS_REVIEW.value
                     elif flags.get("needs_clarification"):
                         ticket_status = TicketStatus.NEEDS_CLARIFICATION.value
 
@@ -290,24 +342,24 @@ class BatchProcessor:
 
                 except Exception as e:
                     logger.error(f"Row {idx} failed: {e}")
-                    result = {
-                        "ticket_index": idx,
-                        "client_guid": guid,
-                        "ai_type": "",
-                        "ai_priority": 0,
-                        "ai_language": "",
-                        "ai_sentiment": "",
-                        "ai_address": "",
-                        "ai_summary": "",
-                        "routed_office": "",
-                        "office_rule": "row_error",
-                        "assigned_manager": "Error",
-                        "assigned_manager_id": None,
-                        "segment": "",
-                        "status": TicketStatus.DEAD_LETTER.value,
-                        "flags": {"row_processing_error": str(e), "needs_review": True},
-                        "correlation_id": correlation_id,
-                    }
+                    
+                    # ---- Save FAILED ticket to DB for visibility ----
+                    ticket = Ticket(
+                        client_guid=guid,
+                        correlation_id=correlation_id,
+                        description=description[:5000],
+                        status=TicketStatus.DEAD_LETTER.value,
+                        segment=segment if 'segment' in locals() else "Mass",
+                        flags={"row_processing_error": str(e), "needs_review": True, **flags},
+                    )
+                    db.add(ticket)
+                    
+                    if result is None:
+                        # Construct a basic result so the UI doesn't crash
+                        result = {
+                            "ticket_index": idx, "client_guid": guid, "ai_type": "Error",
+                            "status": "ERROR", "flags": flags, "correlation_id": correlation_id
+                        }
                     results.append(result)
 
                 if progress_callback:

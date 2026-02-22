@@ -15,15 +15,14 @@ def render_batch_routing():
     with col1:
         ai_mode = st.radio(
             "AI Engine",
-            ["DeepSeek", "Phi-4 Local", "Qwen 2.5 + Vision", "vLLM (Production)"],
-            index=2,  # Default to Qwen
-            help="DeepSeek = Cloud API. Phi-4/Qwen = Local via Ollama. vLLM = Production cluster."
+            ["DeepSeek", "Qwen 2.5 + minicpm (+OCR)", "vLLM (Production)"],
+            index=1,  # Default to Qwen
+            help="DeepSeek = Cloud API. Qwen = Local via Ollama. vLLM = Production cluster."
         )
     with col2:
         info_map = {
             "DeepSeek": ("DeepSeek", "Cloud-based API. Requires DEEPSEEK_API_KEY in .env"),
-            "Phi-4 Local": ("Phi-4 Local", "Runs locally via Ollama. Ensure phi4 is pulled."),
-            "Qwen 2.5 + Vision": ("Qwen 2.5 + Vision", "Local Qwen2.5-14B + MiniCPM-V vision split. Optimized for RTX 5000."),
+            "Qwen 2.5 + minicpm (+OCR)": ("Qwen 2.5 + minicpm (+OCR)", "Local Qwen2.5-14B + MiniCPM-V vision split. Optimized for RTX 5000."),
             "vLLM (Production)": ("vLLM (Production)", "Production target with Continuous Batching & PagedAttention.")
         }
         title, desc = info_map[ai_mode]
@@ -33,8 +32,7 @@ def render_batch_routing():
 
     mode_map = {
         "DeepSeek": "deepseek",
-        "Phi-4 Local": "phi4",
-        "Qwen 2.5 + Vision": "qwen",
+        "Qwen 2.5 + minicpm (+OCR)": "qwen",
         "vLLM (Production)": "vllm"
     }
     mode_key = mode_map[ai_mode]
@@ -167,14 +165,35 @@ def _run_batch_routing(df: pd.DataFrame, ai_mode: str):
 
         def highlight_flags(row):
             flags = row.get("flags", {})
-            if isinstance(flags, dict):
-                if flags.get("needs_review"):
-                    return ['background-color: rgba(255, 50, 50, 0.2)'] * len(row)
-                elif flags.get("needs_clarification"):
-                    return ['background-color: rgba(255, 200, 0, 0.2)'] * len(row)
+            ai_type = row.get("ai_type", "")
+            
+            is_fraud = (ai_type == "Мошеннические действия")
+            needs_review = flags.get("needs_review", False)
+            needs_clarification = flags.get("needs_clarification", False)
+
+            # 1. RED: Fraud
+            if is_fraud:
+                return ['background-color: rgba(255, 50, 50, 0.4)'] * len(row)
+            
+            # 2. YELLOW: Review
+            if needs_review:
+                return ['background-color: rgba(255, 200, 0, 0.25)'] * len(row)
+            
+            # 3. GREEN: Clarify
+            if needs_clarification:
+                return ['background-color: rgba(0, 200, 50, 0.2)'] * len(row)
+                
             return [''] * len(row)
 
-        styled_df = results_df.style.apply(highlight_flags, axis=1)
+        display_df = results_df.copy()
+        display_df["status"] = display_df["status"].replace({
+            "NeedsReview": "Needs Review",
+            "NeedsClarification": "Needs Clarification",
+            "RoutingFailed": "Routing Failed",
+            "DeadLetter": "Processing Error"
+        })
+
+        styled_df = display_df.style.apply(highlight_flags, axis=1)
         st.dataframe(styled_df, column_order=available_cols, use_container_width=True, hide_index=True)
 
         # Charts

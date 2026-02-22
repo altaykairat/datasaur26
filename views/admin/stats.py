@@ -114,18 +114,35 @@ def render_statistics():
                         mgr_name = mgr.name
                         office_name = mgr.office_location
                 
-                ai_type = "—"
+                ai_summary = "—"
+                ai_confidence = "—"
+                ai_tone = "—"
                 if t.ai_analysis_json and isinstance(t.ai_analysis_json, dict):
                     ai_type = t.ai_analysis_json.get("type", "—")
+                    ai_summary = t.ai_analysis_json.get("summary", "—")
+                    conf = t.ai_analysis_json.get("confidence")
+                    if conf is not None:
+                        ai_confidence = f"{float(conf):.2f}"
+                    ai_tone = t.ai_analysis_json.get("sentiment", "—")
                 
+                has_attachment = "No"
+                if t.flags and isinstance(t.flags, dict):
+                    if t.flags.get("attachment_path"):
+                        has_attachment = "Yes 📎"
+
                 flags_text = "—"
                 flag_indicator = ""
+                has_link = False
+                is_fraud = False
+                is_spam = False
+                
                 if t.flags and isinstance(t.flags, dict):
                     flags_list = []
+                    has_link = t.flags.get("contains_link", False)
                     for k, v in t.flags.items():
                         if v is True:
                             flags_list.append(k.replace('_', ' ').title())
-                        elif v is not False and k != "ocr_chars":
+                        elif v is not False and k != "ocr_chars" and k != "attachment_path":
                             flags_list.append(f"{k.replace('_', ' ').title()}: {v}")
                     if flags_list:
                         flags_text = ", ".join(flags_list)
@@ -135,30 +152,50 @@ def render_statistics():
                     elif t.flags.get("needs_clarification"):
                         flag_indicator = "Needs Clarification"
 
+                if t.ai_analysis_json and isinstance(t.ai_analysis_json, dict):
+                    is_fraud = t.ai_analysis_json.get("type") == "Мошеннические действия"
+                    is_spam = t.ai_analysis_json.get("type") == "Спам"
+
+                # Define row coloring trigger
+                row_style = ""
+                if is_fraud:
+                    row_style = "red"
+                elif t.flags.get("needs_review"):
+                    row_style = "yellow"
+                elif t.flags.get("needs_clarification"):
+                    row_style = "green"
+
                 ticket_rows.append({
                     "ID": t.client_guid,
                     "Flag": flag_indicator if flag_indicator else "—",
                     "Created": t.created_at.strftime("%Y-%m-%d %H:%M") if t.created_at else "—",
-                    "Status": t.status,
+                    "Status": "Needs Review" if t.status == "NeedsReview" else ("Needs Clarification" if t.status == "NeedsClarification" else ("Routing Failed" if t.status == "RoutingFailed" else t.status)),
                     "Segment": t.segment or "—",
                     "AI Type": ai_type,
+                    "Confidence": ai_confidence,
+                    "Tone": ai_tone,
+                    "Attach": has_attachment,
+                    "Summary": ai_summary,
                     "Assigned": mgr_name,
                     "Office": office_name,
+                    "_row_style": row_style  # Hidden column for styling
                 })
             
             # Create DataFrame
             df_tickets = pd.DataFrame(ticket_rows)
             
-            # Reorder columns slightly to put Flag near the front
-            cols = ["ID", "Flag", "Created", "Status", "Segment", "AI Type", "Assigned", "Office"]
-            df_tickets = df_tickets[cols]
+            # Reorder columns slightly to put Flag near the front for display
+            display_cols = ["ID", "Flag", "Created", "Status", "Segment", "AI Type", "Confidence", "Tone", "Attach", "Summary", "Assigned", "Office"]
             
-            # Apply styles based on the 'Flag' column
+            # Apply styles based on the '_row_style' hint
             def highlight_flags(row):
-                if row.get("Flag") == "Needs Review":
-                    return ['background-color: rgba(255, 50, 50, 0.2)'] * len(row)
-                elif row.get("Flag") == "Needs Clarification":
-                    return ['background-color: rgba(255, 200, 0, 0.2)'] * len(row)
+                style = row.get("_row_style")
+                if style == "red":
+                    return ['background-color: rgba(255, 50, 50, 0.4)'] * len(row)
+                elif style == "yellow":
+                    return ['background-color: rgba(255, 200, 0, 0.25)'] * len(row)
+                elif style == "green":
+                    return ['background-color: rgba(0, 200, 50, 0.2)'] * len(row)
                 return [''] * len(row)
                 
             styled_df = df_tickets.style.apply(highlight_flags, axis=1)
@@ -169,7 +206,8 @@ def render_statistics():
                 use_container_width=True,
                 hide_index=True,
                 selection_mode="single-row",
-                on_select="rerun"
+                on_select="rerun",
+                column_order=display_cols  # Hide _row_style here
             )
             
             # Show inspector if a row is selected
@@ -197,8 +235,11 @@ def render_statistics():
                     with colA:
                         st.markdown("**Description:**")
                         # Strip OCR text from description
-                        clean_desc = inspect_t.description.split('\n\n---')[0]
-                        st.info(clean_desc)
+                        clean_desc = inspect_t.description.split('\n\n---')[0].strip()
+                        if clean_desc:
+                            st.info(clean_desc)
+                        else:
+                            st.caption("_No textual description provided._")
                         
                         st.markdown("**AI Analysis Overview:**")
                         if inspect_t.ai_analysis_json and isinstance(inspect_t.ai_analysis_json, dict):
@@ -222,9 +263,12 @@ def render_statistics():
                             path = inspect_t.flags.get("attachment_path")
                             import os
                             if os.path.exists(path):
-                                st.image(path, caption="Uploaded Image", use_container_width=True)
+                                st.image(path, caption=f"Attachment: {os.path.basename(path)}", use_container_width=True)
+                                st.caption(f"Path: `{path}`")
                             else:
                                 st.warning(f"Attachment file moving/missing.")
+                                st.error(f"Could not find: `{path}`")
+                                st.info("Ensure the file exists in the `input/attachments/` directory.")
                         else:
                             st.caption("No attachment for this ticket.")
         else:

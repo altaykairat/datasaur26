@@ -87,7 +87,8 @@ class TicketRouter:
             if attachment_path:
                 flags["attachment_path"] = attachment_path
                 
-            is_empty_ticket = not ticket_description.strip() and not attachment_path
+            flags["is_empty_text"] = not ticket_description.strip()
+            is_empty_ticket = flags["is_empty_text"] and not attachment_path
             if is_empty_ticket:
                 flags["empty_ticket"] = True
                 flags["needs_review"] = True
@@ -114,8 +115,11 @@ class TicketRouter:
                     ai_analysis["summary"] = f"⚠️ [В ТЕКСТЕ ОБНАРУЖЕНА ССЫЛКА] " + ai_analysis.get("summary", "")
                 
                 # Vision processing step
-                if attachment_path and not ai_analysis.get("ai_fallback"):
-                    instruction = ai_analysis.get("image_extraction_instruction", "")
+                # Run vision ONLY for qwen mode (user request)
+                can_run_vision = (self.ai_engine.mode == "qwen")
+                if attachment_path and can_run_vision:
+                    # If ai_fallback is true, use a generic instruction
+                    instruction = ai_analysis.get("image_extraction_instruction", "Опиши детали на изображении.")
                     try:
                         with ModelConcurrency.get_vision_semaphore():
                             vision_res = self.vision_engine.analyze_image(attachment_path, instruction)
@@ -130,9 +134,27 @@ class TicketRouter:
                     except Exception as ve:
                         logger.error(f"Vision enrichment failure: {ve}", exc_info=True)
                         flags["vision_processing_failed"] = True
+                # ---- FLAG LOGIC (Mutually Exclusive) ----
+                is_spam = (ai_type == "Спам")
+                is_fraud = (ai_type == "Мошеннические действия")
+                has_attachment = bool(attachment_path)
+                is_empty_text = flags.get("is_empty_text", False)
+                has_link = flags.get("contains_link", False)
+
+                # 1. Review (Yellow)
+                if is_spam or (has_attachment and is_empty_text):
+                    flags["needs_review"] = True
+                    flags["needs_clarification"] = False
+                # 2. Clarify (Green)
+                elif (has_attachment and not is_empty_text) or (has_link and not is_spam and not is_fraud):
+                    flags["needs_clarification"] = True
+                    flags["needs_review"] = False
+                else:
+                    flags["needs_review"] = False
+                    flags["needs_clarification"] = False
 
                 for fk in ("ai_fallback", "ai_schema_error", "ai_type_low_confidence",
-                           "needs_clarification", "language_confidence"):
+                           "language_confidence"):
                     if fk in ai_analysis:
                         flags[fk] = ai_analysis.pop(fk)
 
@@ -152,7 +174,10 @@ class TicketRouter:
                 elif 0.60 <= confidence < 0.85 and not is_spam:
                     flags["needs_review"] = True
 
-            if not is_empty_ticket:
+            is_fraud = not is_empty_ticket and ai_analysis.get("type") == "Мошеннические действия"
+            bypass_assignment = is_empty_ticket or flags.get("needs_review") or is_fraud
+
+            if not bypass_assignment:
                 # 2. Geo-routing
                 offices = self._load_offices(db)
                 geo_res = GeoRouter.route(ai_analysis, client_city, client_region, offices, ticket_id)
@@ -180,7 +205,8 @@ class TicketRouter:
                 manager = None
                 office_city = client_city
                 routed_branch_id = None
-                geo_res = {"city": office_city, "branch_id": None, "rule": "empty_ticket_skipped"}
+                office_rule = "assignment_bypassed" if not is_empty_ticket else "empty_ticket_skipped"
+                geo_res = {"city": office_city, "branch_id": None, "rule": office_rule}
                 filter_trace = {"skipped": True}
                 lb_trace = {"skipped": True}
 
@@ -192,9 +218,13 @@ class TicketRouter:
 
             ticket_status = TicketStatus.ASSIGNED.value if manager else TicketStatus.ROUTING_FAILED.value
             
-            # Override status for flags but keep manager assignment
-            if flags.get("spam_detected"):
-                ticket_status = TicketStatus.SPAM.value
+            # Override status for flags
+            if is_fraud:
+                ticket_status = TicketStatus.ROUTING_FAILED.value # Red
+            elif flags.get("needs_review"):
+                ticket_status = TicketStatus.NEEDS_REVIEW.value
+            elif flags.get("needs_clarification"):
+                ticket_status = TicketStatus.NEEDS_CLARIFICATION.value
 
             return {
                 "ai_analysis": ai_analysis,

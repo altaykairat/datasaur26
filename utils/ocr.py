@@ -34,22 +34,33 @@ def resolve_image_path(source: str) -> str | None:
     """
     Resolve an image source to an absolute file path.
 
-    Checks: absolute path → relative path → input/attachments/<filename>.
-    Returns the resolved path or None.
+    Checks: 
+    1. Absolute path
+    2. Relative to CWD
+    3. input/attachments/<filename>
+    4. input/attachments/<relative_to_source>
+    
+    Returns the resolved absolute path or None.
     """
     if not source:
         return None
 
     source = source.strip()
 
-    # Already a valid file path
+    # 1. & 2. Try as absolute or relative path
     if os.path.isfile(source):
-        return source
+        return os.path.abspath(source)
 
-    # Try input/attachments/ directory
-    candidate = os.path.join(ATTACHMENTS_DIR, os.path.basename(source))
+    # 3. Try input/attachments/ + pure filename
+    filename = os.path.basename(source)
+    candidate = os.path.join(ATTACHMENTS_DIR, filename)
     if os.path.isfile(candidate):
-        return candidate
+        return os.path.abspath(candidate)
+    
+    # 4. Try input/attachments/ + original relative path (if source was like 'subdir/img.png')
+    candidate_rel = os.path.join(ATTACHMENTS_DIR, source)
+    if os.path.isfile(candidate_rel):
+        return os.path.abspath(candidate_rel)
 
     return None
 
