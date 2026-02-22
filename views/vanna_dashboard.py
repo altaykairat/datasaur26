@@ -44,7 +44,9 @@ def _init_vanna():
             "system_prompt": "You are a read-only SQL expert for an AI routing system called FIRE. "
                              "You MUST ONLY output 'SELECT' statements. Never output INSERT, UPDATE, DELETE, DROP, CREATE, or ALTER. "
                              "The user will ask questions about the tickets, managers, and offices tables in Russian. "
-                             "Return only valid PostgreSQL SQL queries. Ensure queries are robust and handle edge cases.",
+                             "Return only valid PostgreSQL SQL queries. Ensure queries are robust and handle edge cases. "
+                             "If the user asks a greeting or a question entirely unrelated to the database (tickets, managers, offices), do NOT attempt to query tables. Instead, return this exact safe query: SELECT 'Я ИИ-ассистент системы FIRE. Пожалуйста, задайте вопрос по базе данных (тикеты, менеджеры, офисы).' as response; "
+                             "To prevent UI freezing, ALWAYS append LIMIT 300 to your queries unless the user explicitly asks for a specific limit or uses aggregate functions (COUNT, SUM) that return single rows.",
         })
 
         # Parse DATABASE_URL for Vanna connection
@@ -166,6 +168,21 @@ def is_safe_query(sql: str) -> bool:
             
     return True
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def cached_generate_sql(prompt: str) -> str:
+    """Cache the LLM generation of SQL to speed up repeated queries."""
+    if "vn" not in st.session_state:
+        _init_vanna()
+    return st.session_state["vn"].generate_sql(question=prompt)
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def cached_run_sql(sql: str):
+    """Cache the execution of SQL against the Postgres database."""
+    if "vn" not in st.session_state:
+        _init_vanna()
+    return st.session_state["vn"].run_sql(sql=sql)
+
+
 def render_ai_dashboard():
     """Render the Vanna AI analytics dashboard."""
     st.markdown("## 🌟 Star Task: AI Analytics Companion")
@@ -183,69 +200,84 @@ def render_ai_dashboard():
     if "vanna_chat_history" not in st.session_state:
         st.session_state["vanna_chat_history"] = []
 
-    # Display previous messages
-    for msg in st.session_state["vanna_chat_history"]:
-        with st.chat_message(msg["role"]):
-            if msg["role"] == "user":
-                st.write(msg["content"])
-            else:
-                if "sql" in msg:
-                    with st.expander("Generated SQL", expanded=False):
-                        st.code(msg["sql"], language="sql")
-                if "df" in msg and msg["df"] is not None:
-                    st.dataframe(msg["df"], use_container_width=True)
-                if "fig" in msg and msg["fig"] is not None:
-                    st.plotly_chart(msg["fig"], use_container_width=True)
-                if "error" in msg:
-                    st.error(msg["error"])
+    # 1. The Top-Fixed Input (Search Bar Style)
+    with st.form(key="ai_query_form", clear_on_submit=True):
+        col1, col2 = st.columns([5, 1])
+        with col1:
+            prompt = st.text_input("Напишите ваш запрос...", label_visibility="collapsed", placeholder="Например: Покажи распределение типов обращений по городам")
+        with col2:
+            submitted = st.form_submit_button("Отправить")
 
-    # Input box
-    prompt = st.chat_input("Например: Покажи количество тикетов по каждому статусу (e.g. show tickets by status)")
-    
-    if prompt:
-        st.session_state["vanna_chat_history"].append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.write(prompt)
+    # 2. The Chat History Container (Below the Input)
+    chat_container = st.container(height=600, border=True)
 
-        with st.chat_message("assistant"):
-            with st.spinner("Analyzing request and generating SQL..."):
-                try:
-                    sql = vn.generate_sql(question=prompt)
-                    
-                    with st.expander("Generated SQL", expanded=True):
-                        st.code(sql, language="sql")
+    # 3. The Logic (Inside the Container)
+    with chat_container:
+        # A. Render all past history
+        for msg in st.session_state["vanna_chat_history"]:
+            with st.chat_message(msg["role"]):
+                if msg["role"] == "user":
+                    st.write(msg["content"])
+                else:
+                    if "sql" in msg:
+                        with st.expander("Generated SQL", expanded=False):
+                            st.code(msg["sql"], language="sql")
+                    if "df" in msg and msg["df"] is not None:
+                        st.dataframe(msg["df"], use_container_width=True)
+                    if "fig" in msg and msg["fig"] is not None:
+                        st.plotly_chart(msg["fig"], use_container_width=True)
+                    if "error" in msg:
+                        st.error(msg["error"])
+
+        # B. Process and render the NEW message inside the container!
+        if submitted and prompt:
+            st.session_state["vanna_chat_history"].append({"role": "user", "content": prompt})
+            with st.chat_message("user"):
+                st.write(prompt)
+
+            with st.chat_message("assistant"):
+                with st.spinner("Analyzing request and generating SQL..."):
+                    try:
+                        sql = cached_generate_sql(prompt)
                         
-                    if not is_safe_query(sql):
-                        st.error("⚠️ Query rejected: Blocked keyword detected or not a SELECT statement.")
-                        st.session_state["vanna_chat_history"].append({"role": "assistant", "sql": sql, "error": "Query rejected by security filter."})
-                        return
+                        with st.expander("Generated SQL", expanded=True):
+                            st.code(sql, language="sql")
+                            
+                        if not is_safe_query(sql):
+                            st.error("⚠️ Query rejected: Blocked keyword detected or not a SELECT statement.")
+                            st.session_state["vanna_chat_history"].append({"role": "assistant", "sql": sql, "error": "Query rejected by security filter."})
+                            st.rerun()
 
-                    # Run SQL
-                    df = vn.run_sql(sql=sql)
-                    st.dataframe(df, use_container_width=True)
-                    
-                    # Generate Chart
-                    fig = None
-                    if not df.empty and len(df.columns) > 1:
-                        try:
-                            # Try to let Vanna generate plotly code
-                            plotly_code = vn.generate_plotly_code(question=prompt, sql=sql, df=df)
-                            fig = vn.get_plotly_figure(plotly_code=plotly_code, df=df)
-                            if fig:
-                                st.plotly_chart(fig, use_container_width=True)
-                        except Exception as e:
-                            st.caption(f"(Could not automatically generate chart: {e})")
-                    
-                    # Save to history
-                    st.session_state["vanna_chat_history"].append({
-                        "role": "assistant", 
-                        "sql": sql,
-                        "df": df,
-                        "fig": fig
-                    })
+                        # Run SQL
+                        df = cached_run_sql(sql)
+                        
+                        fig = None
+                        if df is None or df.empty:
+                            st.info("Нет данных по вашему запросу.")
+                        else:
+                            st.dataframe(df, use_container_width=True)
+                            
+                            # Generate Chart only if we have data
+                            if len(df.columns) > 1:
+                                try:
+                                    # Try to let Vanna generate plotly code
+                                    plotly_code = vn.generate_plotly_code(question=prompt, sql=sql, df=df)
+                                    fig = vn.get_plotly_figure(plotly_code=plotly_code, df=df)
+                                    if fig:
+                                        st.plotly_chart(fig, use_container_width=True)
+                                except Exception as e:
+                                    st.caption(f"(Could not automatically generate chart: {e})")
+                        
+                        # Save to history
+                        st.session_state["vanna_chat_history"].append({
+                            "role": "assistant", 
+                            "sql": sql,
+                            "df": df if df is not None and not df.empty else None,
+                            "fig": fig
+                        })
 
-                except Exception as e:
-                    st.error(f"Error processing your request: {e}")
-                    import traceback
-                    st.code(traceback.format_exc())
-                    st.session_state["vanna_chat_history"].append({"role": "assistant", "error": str(e)})
+                    except Exception as e:
+                        st.error(f"Error processing your request: {e}")
+                        import traceback
+                        st.code(traceback.format_exc())
+                        st.session_state["vanna_chat_history"].append({"role": "assistant", "error": str(e)})
