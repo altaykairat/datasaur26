@@ -136,7 +136,7 @@ def render_statistics():
                         flag_indicator = "Needs Clarification"
 
                 ticket_rows.append({
-                    "ID": t.id,
+                    "ID": t.client_guid,
                     "Flag": flag_indicator if flag_indicator else "—",
                     "Created": t.created_at.strftime("%Y-%m-%d %H:%M") if t.created_at else "—",
                     "Status": t.status,
@@ -180,12 +180,12 @@ def render_statistics():
                 
                 # Get the ID from the selected row index
                 row_idx = selected_rows[0]
-                # Because we reset 'ID' to be just t.id, it is a clean integer
-                inspect_id = int(df_tickets.iloc[row_idx]["ID"])
+                # 'ID' is now the client_guid string
+                inspect_id = str(df_tickets.iloc[row_idx]["ID"])
                 
-                inspect_t = db.query(Ticket).filter(Ticket.id == inspect_id).first()
+                inspect_t = db.query(Ticket).filter(Ticket.client_guid == inspect_id).first()
                 if inspect_t:
-                    st.markdown(f"**Ticket #{inspect_t.id} — {inspect_t.status}**")
+                    st.markdown(f"**Ticket #{inspect_t.client_guid} — {inspect_t.status}**")
                     
                     # Display Client Info if available
                     if inspect_t.flags and ("client_gender" in inspect_t.flags or "client_age" in inspect_t.flags):

@@ -137,8 +137,6 @@ class TicketRouter:
             # Override status for flags but keep manager assignment
             if flags.get("spam_detected"):
                 ticket_status = TicketStatus.SPAM.value
-            elif flags.get("needs_clarification"):
-                ticket_status = TicketStatus.NEEDS_CLARIFICATION.value
 
             return {
                 "ai_analysis": ai_analysis,

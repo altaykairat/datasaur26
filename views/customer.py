@@ -32,7 +32,7 @@ def _render_create_ticket():
         t_data = st.session_state.pop("submitted_ticket")
         st.success("✅ **Ticket Submitted Successfully**")
         st.markdown(f"""
-        - **Ticket ID:** #{t_data['id']}
+        - **Ticket ID:** {t_data['client_guid']}
         - **Date:** {t_data['date']}
         - **Status:** {'Assigned to a Manager' if t_data['status'] == 'Assigned' else 'Waiting for Assignment'}
         
@@ -151,7 +151,7 @@ def _render_create_ticket():
                         db.commit() # Router flushed but we need to commit the new ticket
                         
                         st.session_state["submitted_ticket"] = {
-                            "id": ticket.id,
+                            "client_guid": ticket.client_guid,
                             "status": result["status"],
                             "date": ticket.created_at.strftime("%Y-%m-%d %H:%M UTC"),
                             "snippet": final_description[:100] + "..." if len(final_description) > 100 else final_description
@@ -187,7 +187,7 @@ def _render_my_tickets():
 
             clean_desc = t.description.split('\n\n---')[0]
             rows.append({
-                "ID": t.id,
+                "ID": t.client_guid,
                 "Status": t.status,
                 "Type": ai_type,
                 "Assigned To": manager_name,

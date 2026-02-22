@@ -6,6 +6,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import declarative_base, relationship
 import enum
+import uuid
 
 Base = declarative_base()
 
@@ -72,7 +73,7 @@ class Ticket(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     customer_id = Column(Integer, ForeignKey("users.id"), nullable=True)
-    client_guid = Column(String(100), nullable=True)  # From CSV batch uploads
+    client_guid = Column(String(100), unique=True, nullable=False, default=lambda: str(uuid.uuid4()))
     correlation_id = Column(String(50), nullable=True)  # Unique processing trace ID
     description = Column(Text, nullable=False)
     status = Column(String(20), nullable=False, default=TicketStatus.NEW.value)

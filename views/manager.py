@@ -110,7 +110,7 @@ def _render_workspace(manager_id: int):
                     if t.ai_analysis_json and isinstance(t.ai_analysis_json, dict):
                         ai_type = t.ai_analysis_json.get("type", "—")
                     rows.append({
-                        "ID": t.id,
+                        "ID": t.client_guid,
                         "Type": ai_type,
                         "Description": t.description[:80] + "..." if len(t.description) > 80 else t.description,
                     })
@@ -154,7 +154,7 @@ def _render_ticket_card(ticket: Ticket, db, manager_id: int):
     elif needs_clarification:
         alert_icon = " 🟡 [CLARIFICATION]"
 
-    with st.expander(f"Ticket #{ticket.id} · {ai_type} · Priority: {priority} ({priority_label}){alert_icon}", expanded=False):
+    with st.expander(f"Ticket #{ticket.client_guid} · {ai_type} · Priority: {priority} ({priority_label}){alert_icon}", expanded=False):
         if needs_review:
             st.error("⚠️ **ATTENTION REQUIRED:** This ticket was flagged by AI as needing human review (possible fraud, borderline spam, or medium confidence). Please inspect carefully.")
         elif needs_clarification:
@@ -224,12 +224,12 @@ def _render_ticket_card(ticket: Ticket, db, manager_id: int):
 
         if ticket.status != TicketStatus.CLOSED.value:
             st.markdown('<div class="fire-divider"></div>', unsafe_allow_html=True)
-            if st.button(f"Close Ticket #{ticket.id}", key=f"close_{ticket.id}", type="primary"):
+            if st.button(f"Close Ticket #{ticket.client_guid}", key=f"close_{ticket.client_guid}", type="primary"):
                 ticket.status = TicketStatus.CLOSED.value
                 manager = db.query(Manager).filter(Manager.id == manager_id).first()
                 if manager and manager.current_load > 0:
                     manager.current_load -= 1
                 db.flush()
                 db.commit()
-                st.success(f"Ticket #{ticket.id} closed.")
+                st.success(f"Ticket #{ticket.client_guid} closed.")
                 st.rerun()

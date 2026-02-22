@@ -5,6 +5,7 @@ integrating OCR extraction, idempotency checks, AI enrichment, and DB storage.
 """
 import pandas as pd
 from typing import Callable, Optional
+import uuid
 
 from database.connection import get_db
 from database.models import Ticket, TicketStatus
@@ -63,7 +64,7 @@ class BatchProcessor:
                     segment = str(row.get("Сегмент клиента", "Mass") or "Mass")
                     city = str(row.get("Населённый пункт", "") or "")
                     region = str(row.get("Область", "") or "")
-                    guid = str(row.get("GUID клиента", ""))
+                    guid = str(row.get("GUID клиента", "")).strip() or str(uuid.uuid4())
 
                     flags = {}
                     
@@ -238,7 +239,7 @@ class BatchProcessor:
 
                     # ---- Save ticket to DB ----
                     ticket = Ticket(
-                        client_guid=guid if guid else None,
+                        client_guid=guid,
                         correlation_id=correlation_id,
                         description=description[:5000],
                         status=ticket_status,
