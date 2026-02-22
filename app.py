@@ -25,7 +25,7 @@ st.set_page_config(
 def _get_theme():
     """Get current theme from session state."""
     if "theme" not in st.session_state:
-        st.session_state["theme"] = "light"
+        st.session_state["theme"] = "dark"
     return st.session_state["theme"]
 
 
@@ -45,6 +45,7 @@ def _apply_theme():
         input_bg = "#1E1E2E"
         banner_bg = "#1E293B"
         component_bg = "#1E1E2E"
+        canvas_filter = "none"
     else:
         bg = "#FFFFFF"
         bg_secondary = "#F8F9FA"
@@ -55,8 +56,10 @@ def _apply_theme():
         sidebar_border = "#E5E7EB"
         card_bg = "#FFFFFF"
         input_bg = "#FFFFFF"
+        input_bg = "#FFFFFF"
         banner_bg = "#F0F4FF"
         component_bg = "#FFFFFF"
+        canvas_filter = "none"
 
     accent = "#F59E0B"
     accent_hover = "#D97706"
@@ -115,8 +118,8 @@ def _apply_theme():
 
         /* ---- Inputs & Search Bars ---- */
         .stTextInput input, .stTextArea textarea, .stSelectbox [data-baseweb="select"] {{
-            background-color: {component_bg} !important;
-            color: {text_primary} !important;
+            background-color: #1E1E2E !important;
+            color: #FFFFFF !important;
         }}
 
         /* ---- Expander ---- */
@@ -138,18 +141,22 @@ def _apply_theme():
 
         /* ---- Diagrams & Charts ---- */
         [data-testid="stArrowVegaLiteChart"], [data-testid="stMarkAndMarkContext"], canvas {{
-            background-color: {component_bg} !important;
+            background-color: #1E1E2E !important;
+            filter: {canvas_filter} !important;
         }}
         text, .marks text {{
-            fill: {text_primary} !important;
+            fill: #FFFFFF !important;
         }}
         
         /* ---- Drag and Drop Uploader ---- */
         [data-testid="stFileUploader"] {{
-            background-color: {component_bg} !important;
+            background-color: #1E1E2E !important;
         }}
-        [data-testid="stFileUploader"] div, [data-testid="stFileUploader"] span, [data-testid="stFileUploader"] small, [data-testid="stFileUploader"] label {{
-            color: {text_primary} !important;
+        [data-testid="stFileUploader"] div, [data-testid="stFileUploader"] span, [data-testid="stFileUploader"] label {{
+            color: #FFFFFF !important;
+        }}
+        [data-testid="stFileUploader"] small {{
+            color: #FFFFFF !important;
         }}
 
         /* ---- Custom classes ---- */
@@ -207,18 +214,49 @@ def _apply_theme():
             border: none;
         }}
 
+        /* ---- Popovers & Dropdowns ---- */
+        [data-baseweb="popover"] > div, [data-baseweb="menu"] {{
+            background-color: #1E1E2E !important;
+        }}
+        [data-baseweb="menu"] li {{
+            color: #FFFFFF !important;
+        }}
+
         /* ---- Buttons ---- */
-        .stButton > button, button[data-testid="baseButton-secondary"], button {{
-            background-color: {component_bg} !important;
-            color: {text_primary} !important;
+        .stButton > button, button[data-testid="baseButton-secondary"] {{
+            background-color: #1E1E2E !important;
+            color: #FFFFFF !important;
             border-radius: 8px;
             font-weight: 500;
             letter-spacing: 0.01em;
             transition: all 0.2s ease;
         }}
 
-        .stButton > button:hover, button[data-testid="baseButton-secondary"]:hover, button:hover {{
+        /* Primary Button Override */
+        button[data-testid="baseButton-primary"], .stButton > button[data-testid="baseButton-primary"] {{
+            background-color: #EF4444 !important;
+            color: #FFFFFF !important;
+            border-color: #EF4444 !important;
+        }}
+
+        .stButton > button:hover, button[data-testid="baseButton-secondary"]:hover {{
             transform: translateY(-1px);
+        }}
+        
+        button[data-testid="baseButton-primary"]:hover, .stButton > button[data-testid="baseButton-primary"]:hover {{
+            background-color: #DC2626 !important;
+            border-color: #DC2626 !important;
+        }}
+
+        /* ---- Form Password Hide & Instructions ---- */
+        div[data-testid="InputInstructions"] {{
+            display: none !important;
+        }}
+        [data-baseweb="input"] button {{
+            background-color: #1E1E2E !important;
+        }}
+        [data-baseweb="input"] button svg {{
+            fill: #FFFFFF !important;
         }}
 
         .stProgress > div > div > div > div {{
