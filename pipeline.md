@@ -87,7 +87,7 @@
 - Processing monitor: counts by state, SLA timers
 - Ticket detail view: raw + AI analytics + routing explanation (“why assigned”)
 - Manager/office views: workloads, skills, office address map layer
-- *(Optional/Star)* “AI assistant” in UI: natural-language query → charts/dashboards
+- **“🌟 AI Analytics Companion” (Implemented)**: Natural-language UI in Russian leveraging Vanna + DeepSeek Coder to securely generate real-time SQL queries, dataframes, and Plotly charts.
 
 ### B) API service (backend)
 - **Ingestion API**: upload CSV, validate, store raw, enqueue jobs
