@@ -131,13 +131,13 @@ def render_statistics():
                         flags_text = ", ".join(flags_list)
                         
                     if t.flags.get("needs_review"):
-                        flag_indicator = "🔴 "
+                        flag_indicator = "Needs Review"
                     elif t.flags.get("needs_clarification"):
-                        flag_indicator = "🟡 "
+                        flag_indicator = "Needs Clarification"
 
                 ticket_rows.append({
                     "ID": t.id,
-                    "Flag": flag_indicator.strip() if flag_indicator else "—",
+                    "Flag": flag_indicator if flag_indicator else "—",
                     "Created": t.created_at.strftime("%Y-%m-%d %H:%M") if t.created_at else "—",
                     "Status": t.status,
                     "Segment": t.segment or "—",
@@ -153,9 +153,19 @@ def render_statistics():
             cols = ["ID", "Flag", "Created", "Status", "Segment", "AI Type", "Assigned", "Office"]
             df_tickets = df_tickets[cols]
             
+            # Apply styles based on the 'Flag' column
+            def highlight_flags(row):
+                if row.get("Flag") == "Needs Review":
+                    return ['background-color: rgba(255, 50, 50, 0.2)'] * len(row)
+                elif row.get("Flag") == "Needs Clarification":
+                    return ['background-color: rgba(255, 200, 0, 0.2)'] * len(row)
+                return [''] * len(row)
+                
+            styled_df = df_tickets.style.apply(highlight_flags, axis=1)
+            
             # Use on_select to capture row clicks
             event = st.dataframe(
-                df_tickets,
+                styled_df,
                 use_container_width=True,
                 hide_index=True,
                 selection_mode="single-row",
