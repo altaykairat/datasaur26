@@ -44,6 +44,7 @@ def _apply_theme():
         card_bg = "#1E1E2E"
         input_bg = "#1E1E2E"
         banner_bg = "#1E293B"
+        component_bg = "#1E1E2E"
     else:
         bg = "#FFFFFF"
         bg_secondary = "#F8F9FA"
@@ -53,8 +54,9 @@ def _apply_theme():
         sidebar_bg = "#F9FAFB"
         sidebar_border = "#E5E7EB"
         card_bg = "#FFFFFF"
-        input_bg = "#F9FAFB"
+        input_bg = "#FFFFFF"
         banner_bg = "#F0F4FF"
+        component_bg = "#FFFFFF"
 
     accent = "#F59E0B"
     accent_hover = "#D97706"
@@ -111,9 +113,9 @@ def _apply_theme():
             color: {accent} !important;
         }}
 
-        /* ---- Inputs ---- */
+        /* ---- Inputs & Search Bars ---- */
         .stTextInput input, .stTextArea textarea, .stSelectbox [data-baseweb="select"] {{
-            background-color: {input_bg} !important;
+            background-color: {component_bg} !important;
             color: {text_primary} !important;
         }}
 
@@ -123,9 +125,31 @@ def _apply_theme():
             color: {text_primary} !important;
         }}
 
-        /* ---- Data frame ---- */
-        [data-testid="stDataFrame"] {{
-            background-color: {bg} !important;
+        /* ---- Data frames & Tables ---- */
+        [data-testid="stDataFrame"], [data-testid="stTable"] {{
+            background-color: {component_bg} !important;
+        }}
+        [data-testid="stDataFrame"] div, [data-testid="stTable"] div, th, td {{
+            color: {text_primary} !important;
+        }}
+        th, td {{
+            background-color: {component_bg} !important;
+        }}
+
+        /* ---- Diagrams & Charts ---- */
+        [data-testid="stArrowVegaLiteChart"], [data-testid="stMarkAndMarkContext"], canvas {{
+            background-color: {component_bg} !important;
+        }}
+        text, .marks text {{
+            fill: {text_primary} !important;
+        }}
+        
+        /* ---- Drag and Drop Uploader ---- */
+        [data-testid="stFileUploader"] {{
+            background-color: {component_bg} !important;
+        }}
+        [data-testid="stFileUploader"] div, [data-testid="stFileUploader"] span, [data-testid="stFileUploader"] small, [data-testid="stFileUploader"] label {{
+            color: {text_primary} !important;
         }}
 
         /* ---- Custom classes ---- */
@@ -183,14 +207,17 @@ def _apply_theme():
             border: none;
         }}
 
-        .stButton > button {{
+        /* ---- Buttons ---- */
+        .stButton > button, button[data-testid="baseButton-secondary"], button {{
+            background-color: {component_bg} !important;
+            color: {text_primary} !important;
             border-radius: 8px;
             font-weight: 500;
             letter-spacing: 0.01em;
             transition: all 0.2s ease;
         }}
 
-        .stButton > button:hover {{
+        .stButton > button:hover, button[data-testid="baseButton-secondary"]:hover, button:hover {{
             transform: translateY(-1px);
         }}
 

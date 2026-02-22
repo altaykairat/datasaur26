@@ -179,58 +179,10 @@ def _run_batch_routing(df: pd.DataFrame, ai_mode: str):
         available_cols = [c for c in display_cols if c in results_df.columns]
         st.dataframe(results_df[available_cols], use_container_width=True, hide_index=True)
 
-        # Charts
-        st.markdown('<div class="fire-divider"></div>', unsafe_allow_html=True)
-        _render_inline_charts(live_stats)
-
     except Exception as e:
         st.error(f"Routing failed: {e}")
         import traceback
         st.code(traceback.format_exc())
-
-
-def _render_inline_charts(stats: dict):
-    """Render charts from batch routing results."""
-    col1, col2 = st.columns(2)
-
-    with col1:
-        st.markdown("**Tickets per City**")
-        if stats["by_city"]:
-            city_df = pd.DataFrame(
-                list(stats["by_city"].items()),
-                columns=["City", "Count"]
-            ).sort_values("Count", ascending=False)
-            st.bar_chart(city_df.set_index("City"))
-
-    with col2:
-        st.markdown("**Ticket Types**")
-        if stats["by_type"]:
-            type_df = pd.DataFrame(
-                list(stats["by_type"].items()),
-                columns=["Type", "Count"]
-            ).sort_values("Count", ascending=False)
-            st.bar_chart(type_df.set_index("Type"))
-
-    col3, col4 = st.columns(2)
-    with col3:
-        st.markdown("**Sentiment**")
-        if stats["by_sentiment"]:
-            sent_df = pd.DataFrame(
-                list(stats["by_sentiment"].items()),
-                columns=["Sentiment", "Count"]
-            )
-            st.bar_chart(sent_df.set_index("Sentiment"))
-
-    with col4:
-        st.markdown("**Assignment**")
-        assigned = stats.get("assigned", 0)
-        unassigned = stats.get("unassigned", 0)
-        if assigned + unassigned > 0:
-            assign_df = pd.DataFrame({
-                "Status": ["Assigned", "Unassigned"],
-                "Count": [assigned, unassigned]
-            })
-            st.bar_chart(assign_df.set_index("Status"))
 
 
 def _render_statistics():
@@ -315,6 +267,44 @@ def _render_statistics():
                 st.bar_chart(office_df.set_index("Office"))
         else:
             st.caption("No assigned tickets yet.")
+
+        # Ticket Types & Sentiment
+        all_tks = db.query(Ticket).all()
+        if all_tks:
+            st.markdown('<div class="fire-divider"></div>', unsafe_allow_html=True)
+            col1, col2 = st.columns(2)
+
+            type_counts = {}
+            sentiment_counts = {}
+
+            for t in all_tks:
+                if t.ai_analysis_json and isinstance(t.ai_analysis_json, dict):
+                    t_type = t.ai_analysis_json.get("type", "Unknown")
+                    t_sent = t.ai_analysis_json.get("sentiment", "Unknown")
+                    type_counts[t_type] = type_counts.get(t_type, 0) + 1
+                    sentiment_counts[t_sent] = sentiment_counts.get(t_sent, 0) + 1
+
+            with col1:
+                st.markdown("**Ticket Types**")
+                if type_counts:
+                    type_df = pd.DataFrame(
+                        list(type_counts.items()),
+                        columns=["Type", "Count"]
+                    ).sort_values("Count", ascending=False)
+                    st.bar_chart(type_df.set_index("Type"))
+                else:
+                    st.caption("No type data.")
+
+            with col2:
+                st.markdown("**Sentiment Analysis**")
+                if sentiment_counts:
+                    sent_df = pd.DataFrame(
+                        list(sentiment_counts.items()),
+                        columns=["Sentiment", "Count"]
+                    ).sort_values("Count", ascending=False)
+                    st.bar_chart(sent_df.set_index("Sentiment"))
+                else:
+                    st.caption("No sentiment data.")
 
         # Detailed Tickets Table
         st.markdown('<div class="fire-divider"></div>', unsafe_allow_html=True)
