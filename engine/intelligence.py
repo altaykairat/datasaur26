@@ -10,7 +10,7 @@ SYSTEM_PROMPT = """Ты — опытный AI-аналитик системы о
 
 Твоя задача — проанализировать обращение клиента и вернуть структурированный JSON.
 
-### Формат ответа — JSON с 7 полями:
+### Формат ответа — JSON с 8 полями:
 
 1. "type" — тип обращения, СТРОГО одно из:
    - "Жалоба" — недовольство качеством обслуживания, задержки, грубость сотрудников
@@ -51,19 +51,21 @@ SYSTEM_PROMPT = """Ты — опытный AI-аналитик системы о
    - 0.5-0.7: текст неоднозначный, может относиться к нескольким категориям
    - <0.5: текст слишком короткий, неясный или противоречивый
 
+8. "image_extraction_instruction" — если клиент упоминает вложение (скриншот, чек, фото) или проблема требует проверки интерфейса, напиши ОДНО предложение для Vision-модели: что именно нужно найти или извлечь из картинки. Если вложений не подразумевается, верни пустую строку "".
+
 ### Примеры:
 
 Обращение: "Здравствуйте, я из Караганды, улица Бухар Жирау 52. Вчера мне пришло SMS о списании 150 000 тенге, но я ничего не покупал. Прошу немедленно заблокировать карту!"
 Ответ:
-{"type": "Мошеннические действия", "priority": 10, "language": "RU", "sentiment": "Негативный", "normalized_address": "Караганда, улица Бухар Жирау 52", "summary": "Клиент сообщает о несанкционированном списании 150 000 тенге. Необходимо срочно заблокировать карту и инициировать расследование.", "confidence": 0.95}
+{"type": "Мошеннические действия", "priority": 10, "language": "RU", "sentiment": "Негативный", "normalized_address": "Караганда, улица Бухар Жирау 52", "summary": "Клиент сообщает о несанкционированном списании 150 000 тенге. Необходимо срочно заблокировать карту и инициировать расследование.", "confidence": 0.95, "image_extraction_instruction": ""}
 
 Обращение: "Не могу войти в приложение Freedom Finance, пишет ошибку 503. Пробовал переустановить — не помогло."
 Ответ:
-{"type": "Неработоспособность приложения", "priority": 5, "language": "RU", "sentiment": "Негативный", "normalized_address": "Unknown", "summary": "Ошибка 503 при входе в приложение, переустановка не помогла. Передать в техподдержку для проверки серверной стороны.", "confidence": 0.92}
+{"type": "Неработоспособность приложения", "priority": 5, "language": "RU", "sentiment": "Негативный", "normalized_address": "Unknown", "summary": "Ошибка 503 при входе в приложение, переустановка не помогла. Передать в техподдержку для проверки серверной стороны.", "confidence": 0.92, "image_extraction_instruction": "Проверь скриншот на наличие кода ошибки 503 и опиши текст ошибки на экране."}
 
 Обращение: "Купите наш продукт со скидкой 50%! Лучшее предложение года! Ссылка: example.com"
 Ответ:
-{"type": "Спам", "priority": 1, "language": "RU", "sentiment": "Нейтральный", "normalized_address": "Unknown", "summary": "Рекламное сообщение, не связанное с финансовыми услугами. Маркировать как спам.", "confidence": 0.98}
+{"type": "Спам", "priority": 1, "language": "RU", "sentiment": "Нейтральный", "normalized_address": "Unknown", "summary": "Рекламное сообщение, не связанное с финансовыми услугами. Маркировать как спам.", "confidence": 0.98, "image_extraction_instruction": ""}
 
 ### Инструкция:
 Прочитай обращение внимательно. Сначала определи тип и приоритет, затем остальные поля.
@@ -103,8 +105,20 @@ class IntelligenceEngine:
                 base_url=f"{config.OLLAMA_BASE_URL}/v1",
             )
             self.model = "phi4"
+        elif mode == "qwen":
+            self.client = OpenAI(
+                api_key="ollama",
+                base_url=f"{config.OLLAMA_BASE_URL}/v1",
+            )
+            self.model = "qwen2.5:14b"
+        elif mode == "vllm":
+            self.client = OpenAI(
+                api_key=config.VLLM_API_KEY,
+                base_url=f"{config.VLLM_BASE_URL}/v1",
+            )
+            self.model = config.VLLM_MODEL_NAME
         else:
-            raise ValueError(f"Unknown mode: {mode}. Use 'deepseek' or 'phi4'.")
+            raise ValueError(f"Unknown mode: {mode}. Use 'deepseek', 'phi4', 'qwen', or 'vllm'.")
 
     def analyze_ticket(self, description: str) -> dict:
         """
@@ -119,6 +133,7 @@ class IntelligenceEngine:
             result["priority"] = 3  # Lower priority for empty/garbage text
             result["type"] = "Консультация" # Задано правило для коротких текстов
             result["summary"] = "Пустое или неясное обращение; требуется уточнение у клиента."
+            result["image_extraction_instruction"] = "Опиши, что ты видишь на этом скриншоте или документе, обращая внимание на ошибки и важные детали."
             return result
 
         last_error = None
@@ -196,6 +211,7 @@ class IntelligenceEngine:
             "normalized_address": data.get("normalized_address", "Unknown"),
             "summary": data.get("summary", "Резюме недоступно."),
             "confidence": data.get("confidence", 0.5),
+            "image_extraction_instruction": data.get("image_extraction_instruction", ""),
         }
 
         # Validate type — flag low confidence if unknown
@@ -237,5 +253,105 @@ class IntelligenceEngine:
             "normalized_address": "Unknown",
             "summary": "AI недоступен; требуется ручная проверка обращения.",
             "confidence": 0.0,
+            "image_extraction_instruction": "",
             "ai_fallback": True,
         }
+
+import base64
+
+class VisionEngine:
+    """Vision-Language Model processing attachment."""
+    
+    def __init__(self, mode: str = "minicpm-v"):
+        self.mode = mode
+        if mode == "ollama" or mode == "llava":
+            self.client = OpenAI(
+                api_key="ollama",
+                base_url=f"{config.OLLAMA_BASE_URL}/v1",
+            )
+            self.model = "llava" 
+        elif mode == "minicpm-v":
+            self.client = OpenAI(
+                api_key="ollama",
+                base_url=f"{config.OLLAMA_BASE_URL}/v1",
+            )
+            self.model = "minicpm-v"
+        else:
+            self.client = OpenAI(
+                api_key=config.DEEPSEEK_API_KEY, # Using available fallback
+                base_url="https://api.openai.com/v1",
+            )
+            self.model = "gpt-4o-mini"
+            
+    def _encode_image(self, image_path: str) -> str:
+        with open(image_path, "rb") as image_file:
+            return base64.b64encode(image_file.read()).decode('utf-8')
+            
+    def analyze_image(self, image_path: str, instruction: str) -> dict:
+        """Analyze an image using the local VLM."""
+        if not instruction:
+            instruction = "Опиши, что ты видишь на этом скриншоте или документе, обращая внимание на ошибки и важные детали."
+            
+        try:
+            base64_image = self._encode_image(image_path)
+            prompt = (
+                f"Ты — AI-ассистент поддержки Freedom Finance. Извлеки информацию из картинки в формате JSON.\n"
+                f"Инструкция: {instruction}\n"
+                f"Верни ТОЛЬКО JSON с полями: 'image_summary' (какая информация на скриншоте, строка), "
+                f"'extracted_text' (распознанный текст или числа, строка), 'has_error_message' (boolean)."
+            )
+            
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/jpeg;base64,{base64_image}"
+                                }
+                            }
+                        ]
+                    }
+                ],
+                max_tokens=600,
+                temperature=0.1,
+                timeout=12.0
+            )
+            raw = response.choices[0].message.content.strip()
+            raw = re.sub(r"```json\s*", "", raw)
+            raw = re.sub(r"```\s*", "", raw)
+            
+            data = None
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError:
+                # Try to extract JSON
+                match = re.search(r"\{[^{}]*\}", raw, re.DOTALL)
+                if match:
+                    try:
+                        data = json.loads(match.group())
+                    except:
+                        pass
+            
+            if not data:
+                raise ValueError("Could not parse JSON from VLM")
+                
+            return {
+                "image_summary": data.get("image_summary", ""),
+                "extracted_text": data.get("extracted_text", ""),
+                "has_error_message": bool(data.get("has_error_message", False)),
+                "vision_fallback": False
+            }
+        except Exception as e:
+            print(f"[VISION ERROR] {e}")
+            return {
+                "image_summary": "Ошибка при анализе изображения.",
+                "extracted_text": "",
+                "has_error_message": False,
+                "vision_fallback": True,
+                "error": str(e)
+            }

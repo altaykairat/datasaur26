@@ -36,3 +36,6 @@ Thumbs.db
 action_plan.md
 phase1.md
 reports/
+
+.pgdata/
+pg.log

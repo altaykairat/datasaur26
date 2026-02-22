@@ -4,8 +4,8 @@
 
 Define a production-grade optimization roadmap for a local deployment of:
 
-* 1 Text LLM (tickets + chatbot)
-* 1 Vision-Language Model (attachments only)
+* 1 Text LLM (tickets + chatbot) -> **Qwen2.5:14b-Instruct**
+* 1 Vision-Language Model (attachments only) -> **MiniCPM-V:8b**
 
 Hardware:
 
@@ -150,35 +150,53 @@ Major cost and latency reduction.
 
 ---
 
-# Phase 5 — Advanced Engine Optimization (Optional)
+If identical input seen before:
 
-## TensorRT (or equivalent acceleration engine)
+* Return cached structured result
+* Skip inference entirely
 
-Use only if:
-
-* Very high traffic (>30–50 tickets/min)
-* Strict latency SLA (<200ms target)
-
-Tradeoffs:
-
-* Higher deployment complexity
-* Reduced flexibility
-* More maintenance overhead
-
-For most internal admin systems, not mandatory.
+Major cost and latency reduction.
 
 ---
 
-## Flash Attention / Fused Kernels
+# Phase 5 — Production Target (vLLM & Continuous Batching)
 
-Enable if supported by runtime.
+While `Ollama` is used for rapid local prototyping and MVP deployment, the final production architecture must migrate to **vLLM** to maximize the RTX 5000 ROI.
 
-Benefits:
+## 1. Migrating to vLLM
 
-* Faster attention computation
-* Lower memory bandwidth usage
+Use vLLM when:
 
-Low complexity, safe to enable.
+* Traffic exceeds 30–50 tickets/min.
+* Strict latency SLA (<200ms TTFT) is required.
+
+**Key vLLM Advantages for Production:**
+* **Continuous Batching:** Unlike Ollama's static queue, vLLM dynamically batches incoming requests at the token level, increasing throughput by 3x-4x.
+* **PagedAttention:** Effectively manages KV cache memory, preventing OOM errors during concurrent large-context queries (e.g., long email threads).
+* **AWQ / GPTQ:** Native support for Activation-aware Weight Quantization (AWQ), which preserves model quality better than standard GGUF formats during 4-bit compression.
+
+**Deployment Plan (Linux/WSL2):**
+```bash
+python -m vllm.entrypoints.openai.api_server \
+  --model Qwen/Qwen2.5-14B-Instruct-AWQ \
+  --quantization awq \
+  --gpu-memory-utilization 0.85
+```
+
+## 2. Kernel Acceleration
+
+Enable within vLLM:
+* **FlashAttention-2**: For maximum throughput on Ada/Turing architectures.
+* **CUDA Graphs**: To minimize CPU overhead during model forward passes.
+
+> Note: The `IntelligenceEngine` in python is already built and tested to seamlessly switch to vLLM via the `mode="vllm"` argument.
+
+## 3. Optimization Codebase
+
+Scripts for advanced optimization are provided in the `local_llm/optimization_scripts/` directory:
+- [quantize_awq.py](file:///d:/Altay/hackathon/datasaur26/local_llm/optimization_scripts/quantize_awq.py): Automated 4-bit AWQ quantization.
+- [benchmark_llm.py](file:///d:/Altay/hackathon/datasaur26/local_llm/optimization_scripts/benchmark_llm.py): Latency and Tokens/sec measurement.
+- [trt_blueprint.py](file:///d:/Altay/hackathon/datasaur26/local_llm/optimization_scripts/trt_blueprint.py): TensorRT-LLM compilation logic.
 
 ---
 

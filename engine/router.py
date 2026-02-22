@@ -12,7 +12,8 @@ import re
 from utils.logging import get_safe_logger
 from database.connection import get_db
 from database.models import Office, Ticket, TicketStatus
-from engine.intelligence import IntelligenceEngine
+from engine.intelligence import IntelligenceEngine, VisionEngine
+from utils.concurrency import ModelConcurrency
 
 # Import OOP subcomponents
 from engine.routing.geo import GeoRouter
@@ -25,8 +26,9 @@ logger = get_safe_logger("router_orchestrator")
 class TicketRouter:
     """Orchestrates the FIRE routing pipeline."""
 
-    def __init__(self, ai_mode: str = "deepseek"):
+    def __init__(self, ai_mode: str = "qwen"):
         self.ai_engine = IntelligenceEngine(mode=ai_mode)
+        self.vision_engine = VisionEngine(mode="minicpm-v")
         self._offices_cache = None
 
     def _load_offices(self, db) -> list[dict]:
@@ -45,7 +47,8 @@ class TicketRouter:
     def _enrich(self, description: str) -> dict:
         """Run AI enrichment with fallback handling."""
         try:
-            return self.ai_engine.analyze_ticket(description)
+            with ModelConcurrency.get_text_semaphore():
+                return self.ai_engine.analyze_ticket(description)
         except Exception as e:
             logger.error(f"AI enrichment structural failure: {e}", exc_info=True)
             return {
@@ -111,6 +114,25 @@ class TicketRouter:
                 }
             else:
                 ai_analysis = self._enrich(ticket_description)
+                
+                # Vision processing step
+                if attachment_path and not ai_analysis.get("ai_fallback"):
+                    instruction = ai_analysis.get("image_extraction_instruction", "")
+                    try:
+                        with ModelConcurrency.get_vision_semaphore():
+                            vision_res = self.vision_engine.analyze_image(attachment_path, instruction)
+                            
+                        # Merge vision results deterministically
+                        if vision_res.get("has_error_message"):
+                            flags["image_has_error"] = True
+                        if not vision_res.get("vision_fallback"):
+                            ai_analysis["summary"] += f" [Вложение: {vision_res.get('image_summary')}]"
+                            if vision_res.get("extracted_text"):
+                                ai_analysis["summary"] += f" [Извлеченный текст: {vision_res.get('extracted_text')}]"
+                    except Exception as ve:
+                        logger.error(f"Vision enrichment failure: {ve}", exc_info=True)
+                        flags["vision_processing_failed"] = True
+
                 for fk in ("ai_fallback", "ai_schema_error", "ai_type_low_confidence",
                            "needs_clarification", "language_confidence"):
                     if fk in ai_analysis:
