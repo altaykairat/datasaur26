@@ -6,6 +6,7 @@ integrating OCR extraction, idempotency checks, AI enrichment, and DB storage.
 import pandas as pd
 from typing import Callable, Optional
 import uuid
+import re
 
 from database.connection import get_db
 from database.models import Ticket, TicketStatus
@@ -111,8 +112,17 @@ class BatchProcessor:
                                 else:
                                     flags["ocr_failed"] = ocr_result.get("error", "unknown")
 
-                    if not description.strip():
-                        flags["empty_description"] = True
+                    is_empty_ticket = not description.strip() and not flags.get("attachment_path")
+                    if is_empty_ticket:
+                        flags["needs_review"] = True
+                        flags["empty_ticket"] = True
+
+                    has_link = False
+                    if not is_empty_ticket:
+                        has_link = bool(re.search(r"(?i)\b(?:https?://|www\.)\S+|\b[a-zA-Z0-9.-]+\.(?:com|ru|kz|net|org|info|biz|su|cc|io|me|co)\b(?:/\S*)?", description))
+                        if has_link:
+                            flags["contains_link"] = True
+                            flags["needs_review"] = True
 
                     # ---- Idempotency Check ----
                     if guid:
@@ -144,55 +154,78 @@ class BatchProcessor:
                             continue
 
                     # ---- AI Enrichment ----
-                    ai_analysis = self.router._enrich(description)
+                    if is_empty_ticket:
+                        ai_analysis = {
+                            "type": "Неизвестно", "priority": 5, "language": "RU",
+                            "sentiment": "neutral", "confidence": 0.0,
+                            "summary": "No description or attachment provided."
+                        }
+                    elif has_link:
+                        ai_analysis = {
+                            "type": "Мошеннические действия", "priority": 1, "language": "RU",
+                            "sentiment": "negative", "confidence": 0.99,
+                            "summary": "Ticket contains an external link, flagged as potential fraud."
+                        }
+                    else:
+                        ai_analysis = self.router._enrich(description)
 
-                    for fk in ("ai_fallback", "ai_schema_error", "ai_type_low_confidence",
-                               "needs_clarification", "language_confidence"):
-                        if fk in ai_analysis:
-                            flags[fk] = ai_analysis.pop(fk)
+                        for fk in ("ai_fallback", "ai_schema_error", "ai_type_low_confidence",
+                                   "needs_clarification", "language_confidence"):
+                            if fk in ai_analysis:
+                                flags[fk] = ai_analysis.pop(fk)
 
-                    confidence = ai_analysis.get("confidence", 0.5)
+                        confidence = ai_analysis.get("confidence", 0.5)
 
-                    is_spam = ai_analysis["type"] == "Спам"
-                    if is_spam and confidence >= 0.60:
-                        flags["spam_detected"] = True
-                    elif is_spam:
-                        flags["needs_review"] = True
+                        is_spam = ai_analysis["type"] == "Спам"
+                        if is_spam and confidence >= 0.60:
+                            flags["spam_detected"] = True
+                        elif is_spam:
+                            flags["needs_review"] = True
 
-                    # Fraud check override
-                    if ai_analysis["type"] == "Мошеннические действия" and confidence < 0.8:
-                        flags["needs_review"] = True
-                    elif confidence < 0.60 and not is_spam:
-                        flags["needs_clarification"] = True
-                    elif 0.60 <= confidence < 0.85 and not is_spam:
-                        flags["needs_review"] = True
+                        # Fraud check override
+                        if ai_analysis["type"] == "Мошеннические действия" and confidence < 0.8:
+                            flags["needs_review"] = True
+                        elif confidence < 0.60 and not is_spam:
+                            flags["needs_clarification"] = True
+                        elif 0.60 <= confidence < 0.85 and not is_spam:
+                            flags["needs_review"] = True
 
-                    # ---- Geo-routing ----
-                    geo_res = GeoRouter.route(ai_analysis, city, region, offices, guid)
-                    office_city = geo_res["city"]
-                    routed_branch_id = geo_res["branch_id"]
-                    office_rule = geo_res["rule"]
-                    alternative_branches = geo_res.get("alternative_branches", [])
-                    flags.update(geo_res.get("flags", {}))
+                    if not is_empty_ticket:
+                        # ---- Geo-routing ----
+                        geo_res = GeoRouter.route(ai_analysis, city, region, offices, guid)
+                        office_city = geo_res["city"]
+                        routed_branch_id = geo_res["branch_id"]
+                        office_rule = geo_res["rule"]
+                        alternative_branches = geo_res.get("alternative_branches", [])
+                        flags.update(geo_res.get("flags", {}))
 
-                    # ---- Skill filter ----
-                    candidates, filter_trace = SkillMatcher.filter_managers(
-                        db, routed_branch_id, office_city, segment, ai_analysis["type"], ai_analysis["language"]
-                    )
-                    if filter_trace.get("no_candidate_after_hardskills"):
-                        flags["no_candidate_after_hardskills"] = True
+                        # ---- Skill filter ----
+                        candidates, filter_trace = SkillMatcher.filter_managers(
+                            db, routed_branch_id, office_city, segment, ai_analysis["type"], ai_analysis["language"]
+                        )
+                        if filter_trace.get("no_candidate_after_hardskills"):
+                            flags["no_candidate_after_hardskills"] = True
 
-                    # ---- Load balance + RR ----
-                    manager, lb_trace = LoadBalancer.balance(candidates, routed_branch_id, db)
+                        # ---- Load balance + RR ----
+                        manager, lb_trace = LoadBalancer.balance(candidates, routed_branch_id, db)
 
-                    if manager:
-                        manager.current_load += 1
-                        db.flush()
-                        if routed_branch_id is None:
-                            routed_branch_id = manager.office_id
+                        if manager:
+                            manager.current_load += 1
+                            db.flush()
+                            if routed_branch_id is None:
+                                routed_branch_id = manager.office_id
 
-                    if lb_trace.get("invalid_load_coerced"):
-                        flags["invalid_load"] = True
+                        if lb_trace.get("invalid_load_coerced"):
+                            flags["invalid_load"] = True
+                    else:
+                        manager = None
+                        office_city = city
+                        routed_branch_id = None
+                        office_rule = "empty_ticket_skipped"
+                        alternative_branches = []
+                        geo_res = {"city": city, "branch_id": None, "rule": "empty_ticket_skipped"}
+                        filter_trace = {"skipped": True}
+                        lb_trace = {"skipped": True}
 
                     routing_trace = {
                         "geo_decision": {
@@ -274,7 +307,7 @@ class BatchProcessor:
                         "assigned_manager_id": None,
                         "segment": "",
                         "status": TicketStatus.DEAD_LETTER.value,
-                        "flags": {"row_processing_error": str(e)},
+                        "flags": {"row_processing_error": str(e), "needs_review": True},
                         "correlation_id": correlation_id,
                     }
                     results.append(result)

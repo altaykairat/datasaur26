@@ -145,7 +145,7 @@ NEW → INGESTED → QUEUED → ENRICHING → ENRICHED → ROUTING → ASSIGNED 
 ### Data Quality
 - Missing CSV columns → reject batch with clear error
 - Duplicate `GUID клиента` → idempotent skip, flag `duplicate_ticket_id`
-- Empty description + no attachment → `needs_clarification` flag, lower priority
+- Empty description + no attachment → not assigned to any manager, flag `needs_review`
 - `NaN` descriptions → displayed as "No comments provided" in UI
 
 ### AI Robustness

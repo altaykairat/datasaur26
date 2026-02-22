@@ -106,7 +106,7 @@ def _render_create_ticket():
                         if not final_description:
                             st.warning("Could not read text from screenshot. Please describe your issue in the text box.")
 
-            if not final_description:
+            if not final_description and not screenshot:
                 st.error("Please describe your issue or attach a readable screenshot.")
             else:
                 with st.spinner("Analyzing and routing your ticket..."):
@@ -120,7 +120,8 @@ def _render_create_ticket():
                             client_city=client_city.strip() if client_city else None,
                             client_region=None,
                             ticket_id="",
-                            db=db
+                            db=db,
+                            attachment_path=flags.get("attachment_path")
                         )
                         
                         # Apply OCR flags as well

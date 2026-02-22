@@ -7,6 +7,7 @@ to the specialized classes in the `engine.routing` subpackage.
 import uuid
 import pandas as pd
 from typing import Optional
+import re
 
 from utils.logging import get_safe_logger
 from database.connection import get_db
@@ -61,7 +62,7 @@ class TicketRouter:
 
     def route_single_ticket(self, ticket_description: str, segment: str = "Mass",
                             client_city: str = None, client_region: str = None,
-                            ticket_id: str = "", db=None) -> dict:
+                            ticket_id: str = "", db=None, attachment_path: str = None) -> dict:
         """
         Route a single ticket through the full pipeline.
         
@@ -73,58 +74,95 @@ class TicketRouter:
 
         # Optionally handle external DB session
         close_db = False
+        db_context = None
         if db is None:
-            db_gen = get_db()
-            db = next(db_gen)
+            db_context = get_db()
+            db = db_context.__enter__()
             close_db = True
 
         try:
+            if attachment_path:
+                flags["attachment_path"] = attachment_path
+                
+            is_empty_ticket = not ticket_description.strip() and not attachment_path
+            if is_empty_ticket:
+                flags["empty_ticket"] = True
+                flags["needs_review"] = True
+
+            has_link = False
+            if not is_empty_ticket:
+                has_link = bool(re.search(r"(?i)\b(?:https?://|www\.)\S+|\b[a-zA-Z0-9.-]+\.(?:com|ru|kz|net|org|info|biz|su|cc|io|me|co)\b(?:/\S*)?", ticket_description))
+                if has_link:
+                    flags["contains_link"] = True
+                    flags["needs_review"] = True
+
             # 1. AI Enrichment
-            ai_analysis = self._enrich(ticket_description)
-            for fk in ("ai_fallback", "ai_schema_error", "ai_type_low_confidence",
-                       "needs_clarification", "language_confidence"):
-                if fk in ai_analysis:
-                    flags[fk] = ai_analysis.pop(fk)
+            if is_empty_ticket:
+                ai_analysis = {
+                    "type": "Неизвестно", "priority": 5, "language": "RU",
+                    "sentiment": "neutral", "confidence": 0.0,
+                    "summary": "No description or attachment provided."
+                }
+            elif has_link:
+                ai_analysis = {
+                    "type": "Мошеннические действия", "priority": 1, "language": "RU",
+                    "sentiment": "negative", "confidence": 0.99,
+                    "summary": "Ticket contains an external link, flagged as potential fraud."
+                }
+            else:
+                ai_analysis = self._enrich(ticket_description)
+                for fk in ("ai_fallback", "ai_schema_error", "ai_type_low_confidence",
+                           "needs_clarification", "language_confidence"):
+                    if fk in ai_analysis:
+                        flags[fk] = ai_analysis.pop(fk)
 
-            confidence = ai_analysis.get("confidence", 0.5)
+                confidence = ai_analysis.get("confidence", 0.5)
 
-            is_spam = ai_analysis["type"] == "Спам"
-            if is_spam and confidence >= 0.60:
-                flags["spam_detected"] = True
-            elif is_spam:
-                flags["needs_review"] = True
+                is_spam = ai_analysis["type"] == "Спам"
+                if is_spam and confidence >= 0.60:
+                    flags["spam_detected"] = True
+                elif is_spam:
+                    flags["needs_review"] = True
 
-            # Fraud check override
-            if ai_analysis["type"] == "Мошеннические действия" and confidence < 0.8:
-                flags["needs_review"] = True
-            elif confidence < 0.60 and not is_spam:
-                flags["needs_clarification"] = True
-            elif 0.60 <= confidence < 0.85 and not is_spam:
-                flags["needs_review"] = True
+                # Fraud check override
+                if ai_analysis["type"] == "Мошеннические действия" and confidence < 0.8:
+                    flags["needs_review"] = True
+                elif confidence < 0.60 and not is_spam:
+                    flags["needs_clarification"] = True
+                elif 0.60 <= confidence < 0.85 and not is_spam:
+                    flags["needs_review"] = True
 
-            # 2. Geo-routing
-            offices = self._load_offices(db)
-            geo_res = GeoRouter.route(ai_analysis, client_city, client_region, offices, ticket_id)
-            office_city = geo_res["city"]
-            routed_branch_id = geo_res["branch_id"]
-            flags.update(geo_res.get("flags", {}))
+            if not is_empty_ticket:
+                # 2. Geo-routing
+                offices = self._load_offices(db)
+                geo_res = GeoRouter.route(ai_analysis, client_city, client_region, offices, ticket_id)
+                office_city = geo_res["city"]
+                routed_branch_id = geo_res["branch_id"]
+                flags.update(geo_res.get("flags", {}))
 
-            # 3. Skill filter
-            candidates, filter_trace = SkillMatcher.filter_managers(
-                db, routed_branch_id, office_city, segment, ai_analysis["type"], ai_analysis["language"]
-            )
-            if filter_trace.get("no_candidate_after_hardskills"):
-                flags["no_candidate_after_hardskills"] = True
+                # 3. Skill filter
+                candidates, filter_trace = SkillMatcher.filter_managers(
+                    db, routed_branch_id, office_city, segment, ai_analysis["type"], ai_analysis["language"]
+                )
+                if filter_trace.get("no_candidate_after_hardskills"):
+                    flags["no_candidate_after_hardskills"] = True
 
-            # 4. Load balance + RR
-            manager, lb_trace = LoadBalancer.balance(candidates, routed_branch_id, db)
+                # 4. Load balance + RR
+                manager, lb_trace = LoadBalancer.balance(candidates, routed_branch_id, db)
 
-            if manager:
-                manager.current_load += 1
-                db.flush()
+                if manager:
+                    manager.current_load += 1
+                    db.flush()
 
-            if lb_trace.get("invalid_load_coerced"):
-                flags["invalid_load"] = True
+                if lb_trace.get("invalid_load_coerced"):
+                    flags["invalid_load"] = True
+            else:
+                manager = None
+                office_city = client_city
+                routed_branch_id = None
+                geo_res = {"city": office_city, "branch_id": None, "rule": "empty_ticket_skipped"}
+                filter_trace = {"skipped": True}
+                lb_trace = {"skipped": True}
 
             routing_trace = {
                 "geo_decision": geo_res,
@@ -154,8 +192,8 @@ class TicketRouter:
             }
 
         finally:
-            if close_db:
-                db.close()
+            if close_db and db_context:
+                db_context.__exit__(None, None, None)
 
     def route_batch(self, df: pd.DataFrame, progress_callback=None) -> pd.DataFrame:
         """
