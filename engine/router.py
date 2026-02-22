@@ -475,14 +475,54 @@ class TicketRouter:
         try:
             offices = self._load_offices(db)
 
+            confidence = ai_analysis.get("confidence", 0.5)
+
             # Spam check: skip routing entirely
             if ai_analysis["type"] == "Спам":
+                if confidence >= 0.60:
+                    result = {
+                        "ai_analysis": ai_analysis,
+                        "assigned_manager_id": None,
+                        "assigned_manager_name": "Spam — not assigned",
+                        "office_city": "N/A",
+                        "office_rule": "spam_skip",
+                    }
+                    if db_ctx:
+                        db.commit()
+                    return result
+                else:
+                    flags["needs_review"] = True
+
+            # Fraud check override
+            if ai_analysis["type"] == "Мошеннические действия" and confidence < 0.8:
+                flags["needs_review"] = True
+            elif confidence < 0.60 and ai_analysis["type"] != "Спам":
+                flags["needs_clarification"] = True
+            elif 0.60 <= confidence < 0.85 and ai_analysis["type"] != "Спам":
+                flags["needs_review"] = True
+
+            # If needs clarification, we skip manager assignment
+            if flags.get("needs_clarification"):
+                geo_res = self._geo_route(ai_analysis, client_city, client_region, offices, ticket_id)
+                office_city = geo_res["city"]
+                routed_branch_id = geo_res["branch_id"]
+                office_rule = geo_res["rule"]
+                alternative_branches = geo_res.get("alternative_branches", [])
+                flags.update(geo_res.get("flags", {}))
+
                 result = {
                     "ai_analysis": ai_analysis,
                     "assigned_manager_id": None,
-                    "assigned_manager_name": "Spam — not assigned",
-                    "office_city": "N/A",
-                    "office_rule": "spam_skip",
+                    "assigned_manager_name": "Unassigned (Low Confidence)",
+                    "office_city": office_city,
+                    "routed_branch_id": routed_branch_id,
+                    "alternative_branches": alternative_branches,
+                    "office_rule": "needs_clarification_skip",
+                    "routing_trace": {},
+                    "flags": flags,
+                    "correlation_id": correlation_id,
+                    "workload_at_assignment": None,
+                    "status": TicketStatus.NEEDS_CLARIFICATION.value,
                 }
                 if db_ctx:
                     db.commit()
@@ -664,10 +704,10 @@ class TicketRouter:
                         if fk in ai_analysis:
                             flags[fk] = ai_analysis.pop(fk)
 
-                    # ---- Spam check: skip routing entirely ----
-                    is_spam = ai_analysis["type"] == "Спам"
+                    confidence = ai_analysis.get("confidence", 0.5)
 
-                    if is_spam:
+                    is_spam = ai_analysis["type"] == "Спам"
+                    if is_spam and confidence >= 0.60:
                         flags["spam_detected"] = True
                         result = {
                             "ticket_index": idx,
@@ -706,6 +746,70 @@ class TicketRouter:
                             alternative_branches=[],
                             routing_trace={"spam": True},
                             flags=flags,
+                        )
+                        db.add(ticket)
+
+                        if progress_callback:
+                            progress_callback(idx + 1, total, result)
+                        continue
+                    elif is_spam:
+                        flags["needs_review"] = True
+
+                    # Fraud check override
+                    if ai_analysis["type"] == "Мошеннические действия" and confidence < 0.8:
+                        flags["needs_review"] = True
+                    elif confidence < 0.60 and not is_spam:
+                        flags["needs_clarification"] = True
+                    elif 0.60 <= confidence < 0.85 and not is_spam:
+                        flags["needs_review"] = True
+
+                    if flags.get("needs_clarification"):
+                        geo_res = self._geo_route(ai_analysis, city, region, offices, guid)
+                        office_city = geo_res["city"]
+                        routed_branch_id = geo_res["branch_id"]
+                        office_rule = geo_res["rule"]
+                        alternative_branches = geo_res.get("alternative_branches", [])
+                        flags.update(geo_res.get("flags", {}))
+
+                        result = {
+                            "ticket_index": idx,
+                            "client_guid": guid,
+                            "ai_type": ai_analysis["type"],
+                            "ai_priority": ai_analysis["priority"],
+                            "ai_language": ai_analysis["language"],
+                            "ai_sentiment": ai_analysis["sentiment"],
+                            "ai_address": ai_analysis.get("normalized_address", "Unknown"),
+                            "ai_summary": ai_analysis.get("summary", ""),
+                            "ai_confidence": ai_analysis.get("confidence", 0.5),
+                            "routed_office": office_city,
+                            "routed_branch_id": routed_branch_id,
+                            "alternative_branches": alternative_branches,
+                            "office_rule": "needs_clarification_skip",
+                            "assigned_manager": "Unassigned (Low Confidence)",
+                            "assigned_manager_id": None,
+                            "segment": segment,
+                            "status": TicketStatus.NEEDS_CLARIFICATION.value,
+                            "flags": flags,
+                            "correlation_id": correlation_id,
+                        }
+                        results.append(result)
+
+                        ticket = Ticket(
+                            client_guid=guid if guid else None,
+                            correlation_id=correlation_id,
+                            description=description[:5000],
+                            status=TicketStatus.NEEDS_CLARIFICATION.value,
+                            assigned_manager_id=None,
+                            ai_analysis_json=ai_analysis,
+                            segment=segment,
+                            client_city=city,
+                            client_address=f"{row.get('Улица', '')}, {row.get('Дом', '')}".strip(", "),
+                            office_rule="needs_clarification_skip",
+                            routed_branch_id=routed_branch_id,
+                            alternative_branches=alternative_branches,
+                            routing_trace={},
+                            flags=flags,
+                            workload_at_assignment=None,
                         )
                         db.add(ticket)
 
