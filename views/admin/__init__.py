@@ -9,6 +9,7 @@ import streamlit as st
 from views.admin.batch import render_batch_routing
 from views.admin.stats import render_statistics
 from views.admin.settings import render_settings
+from views.admin.vanna import render_ai_dashboard
 
 def render_admin_portal():
     """Main rendering loop for the Admin Portal."""
@@ -23,7 +24,7 @@ def render_admin_portal():
         st.session_state["last_routing_stats"] = None
 
     # TABS structure
-    tab1, tab2, tab3 = st.tabs(["⚡ Batch Auto-Routing", "📊 Statistics", "⚙️ Settings"])
+    tab1, tab2, tab3, tab4 = st.tabs(["⚡ Batch Auto-Routing", "📊 Statistics", "🤖 AI Assistant", "⚙️ Settings"])
 
     with tab1:
         render_batch_routing()
@@ -32,4 +33,7 @@ def render_admin_portal():
         render_statistics()
 
     with tab3:
+        render_ai_dashboard()
+
+    with tab4:
         render_settings()

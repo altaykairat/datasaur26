@@ -25,6 +25,7 @@ MarkupSafe==3.0.3
 narwhals==2.16.0
 numpy==2.4.2
 openai==2.21.0
+vanna[chromadb]==0.7.4.0
 packaging==26.0
 pandas==2.3.3
 pillow==12.1.1

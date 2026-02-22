@@ -150,11 +150,33 @@ class BatchProcessor:
                         if fk in ai_analysis:
                             flags[fk] = ai_analysis.pop(fk)
 
-                    # ---- Spam check (early exit) ----
+                    confidence = ai_analysis.get("confidence", 0.5)
+
+                    # ---- Spam & Clarification checks (early exit) ----
                     is_spam = ai_analysis["type"] == "Спам"
-                    if is_spam:
+                    
+                    if is_spam and confidence >= 0.60:
                         flags["spam_detected"] = True
                         result = self._handle_spam(db, idx, guid, segment, ai_analysis, city, row, flags, correlation_id, description)
+                        results.append(result)
+                        if progress_callback:
+                            progress_callback(idx + 1, total, result)
+                        continue
+                    elif is_spam:
+                        flags["needs_review"] = True
+
+                    # Fraud check override
+                    if ai_analysis["type"] == "Мошеннические действия" and confidence < 0.8:
+                        flags["needs_review"] = True
+                    elif confidence < 0.60 and not is_spam:
+                        flags["needs_clarification"] = True
+                    elif 0.60 <= confidence < 0.85 and not is_spam:
+                        flags["needs_review"] = True
+
+                    if flags.get("needs_clarification"):
+                        geo_res = GeoRouter.route(ai_analysis, city, region, offices, guid)
+                        flags.update(geo_res.get("flags", {}))
+                        result = self._handle_needs_clarification(db, idx, guid, segment, ai_analysis, geo_res, city, row, flags, correlation_id, description)
                         results.append(result)
                         if progress_callback:
                             progress_callback(idx + 1, total, result)
@@ -299,6 +321,55 @@ class BatchProcessor:
             correlation_id=correlation_id,
             description=description[:5000],
             status=TicketStatus.SPAM.value,
+            assigned_manager_id=None,
+            ai_analysis_json=ai_analysis,
+            segment=segment,
+            client_city=city,
+            client_address=f"{row.get('Улица', '')}, {row.get('Дом', '')}".strip(", "),
+            office_rule="spam_skip",
+            routed_branch_id=None,
+            alternative_branches=[],
+            routing_trace={},
+            flags=flags,
+            workload_at_assignment=None,
+        )
+        db.add(ticket)
+        return result
+
+    def _handle_needs_clarification(self, db, idx, guid, segment, ai_analysis, geo_res, city, row, flags, correlation_id, description):
+        """Handle saving of tickets requiring manual clarification due to low AI confidence."""
+        office_city = geo_res["city"]
+        routed_branch_id = geo_res["branch_id"]
+        office_rule = geo_res["rule"]
+        alternative_branches = geo_res.get("alternative_branches", [])
+
+        result = {
+            "ticket_index": idx,
+            "client_guid": guid,
+            "ai_type": ai_analysis["type"],
+            "ai_priority": ai_analysis["priority"],
+            "ai_language": ai_analysis["language"],
+            "ai_sentiment": ai_analysis["sentiment"],
+            "ai_address": ai_analysis.get("normalized_address", "Unknown"),
+            "ai_summary": ai_analysis.get("summary", ""),
+            "ai_confidence": ai_analysis.get("confidence", 0.5),
+            "routed_office": office_city,
+            "routed_branch_id": routed_branch_id,
+            "alternative_branches": alternative_branches,
+            "office_rule": "needs_clarification_skip",
+            "assigned_manager": "Unassigned (Low Confidence)",
+            "assigned_manager_id": None,
+            "segment": segment,
+            "status": TicketStatus.NEEDS_CLARIFICATION.value,
+            "flags": flags,
+            "correlation_id": correlation_id,
+        }
+        
+        ticket = Ticket(
+            client_guid=guid if guid else None,
+            correlation_id=correlation_id,
+            description=description[:5000],
+            status=TicketStatus.NEEDS_CLARIFICATION.value,
             assigned_manager_id=None,
             ai_analysis_json=ai_analysis,
             segment=segment,
